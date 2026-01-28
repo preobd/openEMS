@@ -25,7 +25,7 @@ See [DISCLAIMER](../DISCLAIMER.md) for safety information and software limitatio
 openEMS provides comprehensive engine monitoring for vehicles that lack modern electronic systems. It's designed for classic cars that typically have minimal instrumentation.
 
 **Key Features:**
-- Multiple sensor type support (temperature, pressure, voltage, RPM)
+- Multiple sensor type support (temperature, pressure, voltage, RPM, speed)
 - Pre-calibrated sensor library
 - Flexible configuration
 - Multiple outputs (LCD, CAN, serial, SD logging)
@@ -63,7 +63,7 @@ VDO Oil Pressure Sensor → Pin A3 → 512 (raw ADC) → 2.5 bar → LCD: "OIL:2
 | Teensy 4.0/4.1 | 12-bit | 3.3V | 16 | Native | Best performance, modern features |
 | Arduino Mega | 10-bit | 5V | 16 | MCP2515 | General purpose |
 | Arduino Due | 12-bit | 3.3V | 16 | Native | High resolution ADC |
-| Arduino Uno | 10-bit | 5V | 6 | MCP2515 | Simple setups, compile-time only |
+| Arduino Uno | 10-bit | 5V | 8 | MCP2515 | Simple setups, compile-time only |
 | ESP32 | 12-bit | 3.3V | 16 | Native | WiFi capability |
 
 ### Critical: Voltage Compatibility
@@ -119,7 +119,12 @@ Junction → Lower resistor → GND
 
 **CAN Bus:**
 
-*For Teensy with Native FlexCAN:*
+**⚠️ All CAN functionality requires an external CAN transceiver** (MCP2551, SN65HVD230, etc.)
+
+For complete wiring diagrams, transceiver selection, and troubleshooting, see:
+[CAN Transceiver Hardware Guide](guides/hardware/CAN_TRANSCEIVER_GUIDE.md)
+
+*Quick reference - Teensy with Native FlexCAN:*
 ```
 Teensy Pin 22 (CAN_TX) → CAN transceiver TX
 Teensy Pin 23 (CAN_RX) → CAN transceiver RX
@@ -127,11 +132,12 @@ Transceiver CAN_H → Vehicle CAN High
 Transceiver CAN_L → Vehicle CAN Low
 ```
 
-*For Boards with MCP2515:*
+*Quick reference - Boards with MCP2515:*
 ```
 MCP2515 CS → Configurable pin (default: Pin 9)
 MCP2515 INT → Configurable pin (default: Pin 2)
 MCP2515 SCK/MISO/MOSI → SPI pins
+MCP2515 requires external MCP2551/TJA1050 transceiver
 ```
 
 CAN bus requires 120Ω termination resistors at both ends.
@@ -142,6 +148,15 @@ CAN bus requires 120Ω termination resistors at both ends.
 
 ### Serial Commands
 
+The help system is hierarchical and organized by category. Use `HELP` to see all categories, or `HELP <category>` for detailed help:
+
+```
+HELP                    # Show all help categories
+HELP SET                # Show all SET commands
+HELP CALIBRATION        # Show calibration commands
+HELP QUICK              # Show compact command reference
+```
+
 Configure sensors using the `SET` command:
 
 ```
@@ -151,8 +166,8 @@ SET <pin> <application> <sensor>
 **Examples:**
 ```
 SET 6 CHT MAX6675                    # K-type thermocouple on digital pin 6
-SET A2 COOLANT_TEMP VDO_120C_LOOKUP  # VDO 120°C sensor on analog pin A2
-SET A3 OIL_PRESSURE VDO_5BAR         # VDO 5-bar pressure on analog pin A3
+SET A2 COOLANT_TEMP VDO_120C_TABLE  # VDO 120°C sensor on analog pin A2
+SET A3 OIL_PRESSURE VDO_5BAR_CURVE         # VDO 5-bar pressure on analog pin A3
 SET A4 OIL_TEMP VDO_150C_STEINHART   # VDO 150°C sensor on analog pin A4
 SET A6 PRIMARY_BATTERY VOLTAGE_DIVIDER  # Battery voltage on analog pin A6
 ```
@@ -193,19 +208,20 @@ openEMS includes 30+ pre-calibrated sensor configurations:
 |--------|-------------|-------|
 | `MAX6675` | K-type thermocouple | 0-1024°C |
 | `MAX31855` | K-type thermocouple (high accuracy) | -200 to 1350°C |
-| `VDO_120C_LOOKUP` | VDO 120°C sender | -40 to 120°C |
+| `VDO_120C_TABLE` | VDO 120°C sender | -40 to 120°C |
 | `VDO_120C_STEINHART` | VDO 120°C sender (faster) | -40 to 120°C |
-| `VDO_150C_LOOKUP` | VDO 150°C sender | -40 to 150°C |
+| `VDO_150C_TABLE` | VDO 150°C sender | -40 to 150°C |
 | `VDO_150C_STEINHART` | VDO 150°C sender (faster) | -40 to 150°C |
 
 ### Pressure Sensors
 
 | Sensor | Description | Range |
 |--------|-------------|-------|
-| `VDO_2BAR` | VDO 2-bar sender | 0-2 bar (0-29 PSI) |
-| `VDO_5BAR` | VDO 5-bar sender | 0-5 bar (0-73 PSI) |
+| `VDO_2BAR_CURVE` | VDO 2-bar sender | 0-2 bar (0-29 PSI) |
+| `VDO_5BAR_CURVE` | VDO 5-bar sender | 0-5 bar (0-73 PSI) |
 | `GENERIC_BOOST` | Generic 0.5-4.5V | Configurable |
 | `MPX4250AP` | Freescale MAP sensor | 20-250 kPa |
+| `MPX5700AP` | Freescale MAP sensor | 15-700 kPa |
 
 ### Other Sensors
 
@@ -213,6 +229,7 @@ openEMS includes 30+ pre-calibrated sensor configurations:
 |--------|-------------|
 | `VOLTAGE_DIVIDER` | 12V battery monitoring |
 | `W_PHASE_RPM` | Alternator W-phase RPM |
+| `HALL_SPEED` | Hall effect speed sensor (VDO, OEM, generic) |
 | `FLOAT_SWITCH` | Digital level switch |
 | `BME280_TEMP` | Ambient temperature |
 | `BME280_PRESSURE` | Barometric pressure |
@@ -230,15 +247,16 @@ Each input measures a specific application:
 |-------------|-------------|--------|----------------|
 | `CHT` | Cylinder Head Temperature | 30s | MAX6675 |
 | `EGT` | Exhaust Gas Temperature | 20s | MAX31855 |
-| `COOLANT_TEMP` | Engine Coolant | 60s | VDO_120C_LOOKUP |
+| `COOLANT_TEMP` | Engine Coolant | 60s | VDO_120C_TABLE |
 | `OIL_TEMP` | Engine Oil | 60s | VDO_150C_STEINHART |
 | `TCASE_TEMP` | Transfer Case | 60s | VDO_150C_STEINHART |
-| `OIL_PRESSURE` | Engine Oil Pressure | 60s | VDO_5BAR |
-| `BOOST_PRESSURE` | Boost/MAP | 0s | MPX4250AP |
-| `FUEL_PRESSURE` | Fuel Pressure | 5s | VDO_5BAR |
+| `OIL_PRESSURE` | Engine Oil Pressure | 60s | VDO_5BAR_CURVE |
+| `BOOST_PRESSURE` | Boost/MAP | 0s | MPX4250AP, MPX5700AP |
+| `FUEL_PRESSURE` | Fuel Pressure | 5s | VDO_5BAR_CURVE |
 | `PRIMARY_BATTERY` | Main Battery | 1s | VOLTAGE_DIVIDER |
 | `AUXILIARY_BATTERY` | Secondary Battery | 2s | VOLTAGE_DIVIDER |
 | `ENGINE_RPM` | Engine Speed | 0s | W_PHASE_RPM |
+| `VEHICLE_SPEED` | Vehicle Speed | 0s | HALL_SPEED |
 | `COOLANT_LEVEL` | Coolant Level | 0s | FLOAT_SWITCH |
 | `AMBIENT_TEMP` | Ambient Temperature | 2s | BME280_TEMP |
 
@@ -292,6 +310,18 @@ OUTPUT Alarm ENABLE
 OUTPUT Alarm INTERVAL 500   # Check alarms every 500ms
 ```
 
+### OBD-II Scanner Support
+
+Standard OBD-II request/response for Bluetooth scanners.
+
+```
+OUTPUT CAN ENABLE
+# Works automatically with ELM327 Bluetooth adapters
+# Supports apps: Torque, OBD Fusion, Car Scanner, DashCommand
+```
+
+See [OBD-II Scanner Guide](guides/outputs/OBD2_SCANNER_GUIDE.md) for setup.
+
 ---
 
 ## Documentation Index
@@ -310,16 +340,24 @@ OUTPUT Alarm INTERVAL 500   # Check alarms every 500ms
 - [THERMOCOUPLE_GUIDE.md](guides/sensor-types/THERMOCOUPLE_GUIDE.md) - MAX6675/MAX31855
 - [VDO_SENSOR_GUIDE.md](guides/sensor-types/VDO_SENSOR_GUIDE.md) - VDO temperature/pressure
 - [W_PHASE_RPM_GUIDE.md](guides/sensor-types/W_PHASE_RPM_GUIDE.md) - RPM for classic cars
+- [HALL_SPEED_GUIDE.md](guides/sensor-types/HALL_SPEED_GUIDE.md) - Vehicle speed sensing
 - [PRESSURE_SENSOR_GUIDE.md](guides/sensor-types/PRESSURE_SENSOR_GUIDE.md) - Pressure sensors
 - [VOLTAGE_SENSOR_GUIDE.md](guides/sensor-types/VOLTAGE_SENSOR_GUIDE.md) - Voltage monitoring
 - [DIGITAL_SENSOR_GUIDE.md](guides/sensor-types/DIGITAL_SENSOR_GUIDE.md) - Float switches
 
+### Output Guides
+- [REALDASH_SETUP_GUIDE.md](guides/outputs/REALDASH_SETUP_GUIDE.md) - RealDash dashboard
+- [OBD2_SCANNER_GUIDE.md](guides/outputs/OBD2_SCANNER_GUIDE.md) - ELM327 / Torque setup
+- [RELAY_CONTROL.md](guides/outputs/RELAY_CONTROL.md) - Relay control outputs
+
 ### Hardware Guides
+- [CAN_TRANSCEIVER_GUIDE.md](guides/hardware/CAN_TRANSCEIVER_GUIDE.md) - CAN transceiver selection and wiring
 - [BIAS_RESISTOR_GUIDE.md](guides/hardware/BIAS_RESISTOR_GUIDE.md) - Resistor selection
 - [PIN_REQUIREMENTS_GUIDE.md](guides/hardware/PIN_REQUIREMENTS_GUIDE.md) - Pin validation
 
 ### Reference
 - [SERIAL_COMMANDS.md](reference/SERIAL_COMMANDS.md) - Complete command reference
+- [OBD2_PID_REFERENCE.md](reference/OBD2_PID_REFERENCE.md) - OBD-II PID catalog
 
 ### Architecture (Contributors)
 - [REGISTRY_SYSTEM.md](architecture/REGISTRY_SYSTEM.md) - Hash-based sensor lookups
@@ -345,6 +383,3 @@ OUTPUT Alarm INTERVAL 500   # Check alarms every 500ms
 - Include firmware version (`VERSION` command)
 - Include your configuration (`DUMP` command)
 
----
-
-**For the classic car community.**

@@ -5,6 +5,8 @@
 #include "output_base.h"
 #include "../config.h"
 #include "../inputs/input_manager.h"
+#include "../lib/message_router.h"
+#include "../lib/message_api.h"
 
 // Declare external functions from output modules
 extern void initCAN();
@@ -27,6 +29,12 @@ extern void initAlarmOutput();
 extern void sendAlarmOutput(Input*);
 extern void updateAlarmOutput();
 
+#ifdef ENABLE_RELAY_OUTPUT
+extern void initRelayOutput();
+extern void sendRelayOutput(Input*);
+extern void updateRelayOutput();
+#endif
+
 // Define output modules array - always compiled, controlled by runtime flags
 OutputModule outputModules[] = {
     {"CAN", false, initCAN, sendCAN, updateCAN, 100},
@@ -34,9 +42,16 @@ OutputModule outputModules[] = {
     {"Serial", false, initSerialOutput, sendSerialOutput, updateSerialOutput, 1000},
     {"SD_Log", false, initSDLog, sendSDLog, updateSDLog, 5000},
     {"Alarm", true, initAlarmOutput, sendAlarmOutput, updateAlarmOutput, 100},
+#ifdef ENABLE_RELAY_OUTPUT
+    {"Relay", true, initRelayOutput, sendRelayOutput, updateRelayOutput, 100},
+#endif
 };
 
-const int numOutputModules = 5;  // Updated from 4 to 5
+#ifdef ENABLE_RELAY_OUTPUT
+const int numOutputModules = 6;
+#else
+const int numOutputModules = 5;
+#endif
 
 // Track last send time for each output module
 static uint32_t lastOutputSend[sizeof(outputModules) / sizeof(outputModules[0])];
@@ -49,8 +64,6 @@ void initOutputModules() {
 
         if (outputModules[i].enabled && outputModules[i].init != nullptr) {
             outputModules[i].init();
-            Serial.print(F("✓ Initialized "));
-            Serial.println(outputModules[i].name);
         }
         lastOutputSend[i] = 0;  // Initialize timing
     }
@@ -142,16 +155,26 @@ bool setOutputInterval(const char* name, uint16_t interval) {
  * List all outputs with their status
  */
 void listOutputs() {
-    Serial.println(F("=== Output Modules ==="));
+    msg.control.println(F("=== Output Modules ==="));
     for (int i = 0; i < numOutputModules; i++) {
-        Serial.print(outputModules[i].name);
-        Serial.print(F(": "));
+        msg.control.print(outputModules[i].name);
+        msg.control.print(F(": "));
         if (outputModules[i].enabled) {
-            Serial.print(F("Enabled, Interval: "));
-            Serial.print(outputModules[i].sendInterval);
-            Serial.println(F("ms"));
+            msg.control.print(F("Enabled, Interval: "));
+            msg.control.print(outputModules[i].sendInterval);
+            msg.control.println(F("ms"));
         } else {
-            Serial.println(F("Disabled"));
+            msg.control.println(F("Disabled"));
         }
+    }
+}
+
+/**
+ * List available output module names
+ */
+void listOutputModules() {
+    msg.control.println(F("=== Available Output Modules ==="));
+    for (int i = 0; i < numOutputModules; i++) {
+        msg.control.println(outputModules[i].name);
     }
 }

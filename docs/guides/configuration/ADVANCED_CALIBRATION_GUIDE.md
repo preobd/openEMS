@@ -141,7 +141,7 @@ The polynomial relates resistance to pressure: `R = a×P² + b×P + c`
 
 **Example:** Custom VDO-style sensor:
 ```
-SET A3 OIL_PRESSURE VDO_5BAR
+SET A3 OIL_PRESSURE VDO_5BAR_CURVE
 SET A3 PRESSURE_POLY 1000 -0.3682 36.465 10.648
 SAVE
 ```
@@ -374,6 +374,3 @@ SAVE
 - [BIAS_RESISTOR_GUIDE.md](../hardware/BIAS_RESISTOR_GUIDE.md) - Bias resistor selection
 - [ADDING_SENSORS.md](ADDING_SENSORS.md) - Adding new sensor types to the library
 
----
-
-**For the classic car community.**

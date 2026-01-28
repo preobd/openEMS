@@ -15,13 +15,15 @@ openEMS provides comprehensive engine monitoring for vehicles that lack modern e
 - Monitors pressure sensors (oil, boost, fuel)
 - Monitors battery voltage
 - Monitors engine RPM (via alternator W-phase)
+- Monitors vehicle speed (via hall effect sensors)
 - Displays data on LCD screen
-- Outputs standard OBDII PIDs via CAN bus
+- Outputs standard OBD-II PIDs via CAN bus (request/response and broadcast modes)
 - Logs data to serial and SD card
 - Configurable alarms with audible alerts
+- **Controls 12V relays** based on sensor thresholds (cooling fans, pumps, warning lights)
 
 **What it doesn't do:**
-- Engine control (monitoring only, no outputs to engine)
+- Engine control (monitoring only, relay outputs are auxiliary only)
 - Interface with existing factory ECUs or OBDII systems
 - Provide safety certification or guarantees
 
@@ -30,10 +32,11 @@ openEMS provides comprehensive engine monitoring for vehicles that lack modern e
 ## Supported Hardware
 
 **Platforms:**
-- Teensy 4.0/4.1 (native CAN, excellent ADC)
-- Arduino Mega 2560 (8KB RAM, full features)
+- **Teensy 4.1** (recommended - 8MB flash, built-in SD, native CAN, excellent ADC)
+- Teensy 4.0 (2MB flash, native CAN, excellent ADC)
+- Arduino Mega 2560 (256KB flash, 8KB RAM, full features)
 - Arduino Due, ESP32 (12-bit ADC)
-- Arduino Uno (2KB RAM, limited - see [Static Builds](docs/advanced/STATIC_BUILDS_GUIDE.md))
+- Arduino Uno (32KB flash, 2KB RAM, limited - see [Static Builds](docs/advanced/STATIC_BUILDS_GUIDE.md))
 
 **Sensors:**
 
@@ -51,14 +54,15 @@ openEMS provides comprehensive engine monitoring for vehicles that lack modern e
 *Other:*
 - Battery voltage monitoring (with divider)
 - W-phase alternator RPM sensing
+- Hall effect speed sensors (VDO, OEM, generic 3-wire)
 - BME280 environmental (temp, pressure, humidity, altitude)
 - Digital inputs (float switches, warning lights)
 - Custom calibration support for unlisted sensors
 
 **Outputs:**
 - 20x4 I2C LCD display
-- CAN bus (standard OBDII PIDs)
-- RealDash mobile dashboard
+- CAN bus with OBD-II request/response (works with ELM327 adapters and Torque app)
+- RealDash mobile dashboard (CAN broadcast mode)
 - Serial CSV output
 - SD card data logging
 
@@ -73,15 +77,26 @@ openEMS provides comprehensive engine monitoring for vehicles that lack modern e
 git clone https://github.com/preobd/openEMS.git
 cd openEMS
 
-# Build with PlatformIO
-pio run
+# Build for your platform
+pio run -e teensy41      # Teensy 4.1 with built-in SD (recommended)
+pio run -e teensy40      # Teensy 4.0
+pio run -e mega2560      # Arduino Mega 2560
+pio run -e uno_static    # Arduino Uno (static config)
 
 # Upload to your board
-pio run -t upload
+pio run -e teensy41 -t upload
 
 # Open serial monitor (115200 baud)
 pio device monitor
 ```
+
+**Configuration Files:**
+- **platformio.ini** - Controls which features compile into firmware
+- **src/config.h** - Hardware pins, timing intervals, default units
+
+All builds include all output modules. Use serial commands to enable/disable outputs at runtime.
+
+See [Build Configuration Guide](docs/guides/configuration/BUILD_CONFIGURATION_GUIDE.md) for details.
 
 ### Configure Sensors
 
@@ -100,7 +115,7 @@ SAVE
 RUN                                                   # Enter RUN mode (starts sensors)
 ```
 
-**Multi-function button (Pin 5):**
+**Multi-function button:**
 - Hold during boot → Enter CONFIG mode
 - Press in RUN mode → Silence alarms for 30 seconds
 - Hold briefly during RUN mode to toggle display on/off
@@ -125,12 +140,14 @@ VERSION                  # Show firmware version
 - **[Pressure Sensor Guide](docs/guides/sensor-types/PRESSURE_SENSOR_GUIDE.md)** - Pressure sensor wiring
 - **[Voltage Monitoring Guide](docs/guides/sensor-types/VOLTAGE_SENSOR_GUIDE.md)** - Battery monitoring
 - **[W-Phase RPM Guide](docs/guides/sensor-types/W_PHASE_RPM_GUIDE.md)** - RPM sensing for classics
+- **[Hall Effect Speed Guide](docs/guides/sensor-types/HALL_SPEED_GUIDE.md)** - Vehicle speed sensing
 - **[Digital Sensor Guide](docs/guides/sensor-types/DIGITAL_SENSOR_GUIDE.md)** - Float switches
 
 ### Configuration
 - **[Serial Commands Reference](docs/reference/SERIAL_COMMANDS.md)** - Complete command list
 - **[CONFIG/RUN Mode Guide](docs/guides/configuration/CONFIG_RUN_MODE_GUIDE.md)** - Safe configuration workflow
 - **[Alarm System Guide](docs/guides/configuration/ALARM_SYSTEM_GUIDE.md)** - Alarm state machine
+- **[Relay Control Guide](docs/guides/outputs/RELAY_CONTROL.md)** - Automatic relay control for fans, pumps, and lights
 - **[Advanced Calibration](docs/guides/configuration/ADVANCED_CALIBRATION_GUIDE.md)** - Custom sensor calibrations
 
 ### Advanced Topics
@@ -157,9 +174,12 @@ SAVE                        # Save configuration to EEPROM
 ### Query (any mode)
 
 ```
+HELP                      # Show help category overview
+HELP <category>           # Show detailed help (LIST, SET, CALIBRATION, etc.)
+HELP QUICK                # Show compact command reference
 LIST INPUTS               # Show all configured sensors
 LIST APPLICATIONS         # Show available application types
-LIST SENSORS              # Show available sensor types  
+LIST SENSORS              # Show available sensor types
 INFO <pin>                # Show details for one input
 DUMP                      # Show complete system state
 VERSION                   # Show firmware version

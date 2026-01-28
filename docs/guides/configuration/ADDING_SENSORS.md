@@ -20,7 +20,7 @@ openEMS uses a **registry-based architecture** where sensors are defined in PROG
 If your sensor is already in the library, configure it via serial commands:
 
 ```
-SET A2 COOLANT_TEMP VDO_120C_LOOKUP
+SET A2 COOLANT_TEMP VDO_120C_TABLE
 SAVE
 ```
 
@@ -40,10 +40,11 @@ openEMS uses **hash-based registries** instead of enums. This provides:
 
 ### The Three Registries
 
-1. **Sensor Library** (`src/lib/sensor_library.h`)
-   - Defines physical sensors (MAX6675, VDO_120C_LOOKUP, etc.)
+1. **Sensor Library** (`src/lib/sensor_library.h` + `src/lib/sensor_library/`)
+   - Defines physical sensors (MAX6675, VDO_120C_TABLE, etc.)
    - Links sensors to read functions and calibration data
-   - ~20 sensors, ~3KB in PROGMEM
+   - Modular structure: sensors organized by type in `sensor_library/sensors/`
+   - ~28 sensors, ~3KB in PROGMEM
 
 2. **Application Presets** (`src/lib/application_presets.h`)
    - Defines what you're measuring (CHT, OIL_PRESSURE, etc.)
@@ -88,7 +89,14 @@ Example output: `0xABCD`
 
 ### Step 2: Add Calibration Data (if needed)
 
-In `src/lib/sensor_calibration_data.h`, add calibration data if your sensor needs it:
+In the appropriate manufacturer file under `src/lib/sensor_calibration_data/`, add calibration data if your sensor needs it.
+
+**For VDO sensors**: Edit `src/lib/sensor_calibration_data/vdo/vdo_calibrations.h`
+**For AEM sensors**: Edit `src/lib/sensor_calibration_data/aem/aem_calibrations.h`
+**For NXP sensors**: Edit `src/lib/sensor_calibration_data/nxp/nxp_calibrations.h`
+**For generic sensors**: Edit `src/lib/sensor_calibration_data/generic/generic_calibrations.h`
+**For system defaults**: Edit `src/lib/sensor_calibration_data/system/system_calibrations.h`
+**For new manufacturers**: Create a new directory and header file (see below)
 
 **For a Thermistor (Steinhart-Hart):**
 ```cpp
@@ -116,12 +124,12 @@ static const PROGMEM LookupEntry my_thermistor_lookup[] = {
     {800,  -5.0},
     {900, -20.0},
 };
-#define MY_THERMISTOR_LOOKUP_SIZE 10
+#define MY_THERMISTOR_TABLE_SIZE 10
 
 static const PROGMEM ThermistorLookupCalibration my_thermistor_lookup_cal = {
     .bias_resistor = 1000.0,
     .lookup_table = my_thermistor_lookup,
-    .table_size = MY_THERMISTOR_LOOKUP_SIZE
+    .table_size = MY_THERMISTOR_TABLE_SIZE
 };
 ```
 
@@ -136,44 +144,55 @@ static const PROGMEM PressureLinearCalibration my_pressure_cal = {
 };
 ```
 
-### Step 3: Add PROGMEM Strings
+### Step 3: Find the Appropriate Category File
 
-In `src/lib/sensor_library.h`, add the name and label strings:
+The sensor library is organized by sensor type in `src/lib/sensor_library/sensors/`:
+
+| File | Sensor Types |
+|------|--------------|
+| `thermocouples.h` | MAX6675, MAX31855 |
+| `thermistors.h` | VDO thermistors, generic NTC, linear temperature |
+| `pressure.h` | Linear, polynomial, table-based pressure |
+| `voltage.h` | Voltage divider |
+| `frequency.h` | RPM and speed sensors |
+| `environmental.h` | BME280 and other Environmental sensors |
+| `digital.h` | Float switch and digital inputs |
+
+Choose the file that matches your sensor type.
+
+### Step 4: Add PROGMEM Strings and X_SENSOR Entry
+
+Edit the appropriate category file (e.g., `src/lib/sensor_library/sensors/thermistors.h`):
 
 ```cpp
-// Near the top with other PSTR definitions
+// ===== PROGMEM STRINGS =====
+// Add near other string definitions in the file
 static const char PSTR_MY_NEW_SENSOR[] PROGMEM = "MY_NEW_SENSOR";
 static const char PSTR_MY_NEW_SENSOR_LABEL[] PROGMEM = "My New 10K NTC Sensor";
+
+// ===== SENSOR ENTRIES (X-MACRO) =====
+// Add to the category's macro (e.g., THERMISTOR_SENSORS)
+#define THERMISTOR_SENSORS \
+    /* ... existing sensors ... */ \
+    X_SENSOR(PSTR_MY_NEW_SENSOR, PSTR_MY_NEW_SENSOR_LABEL, nullptr, readThermistorSteinhart, nullptr, \
+             MEASURE_TEMPERATURE, CAL_THERMISTOR_STEINHART, &my_custom_thermistor_cal, \
+             SENSOR_READ_INTERVAL_MS, -40.0, 150.0, 0xABCD, PIN_ANALOG)
 ```
 
-### Step 4: Add to SENSOR_LIBRARY Array
-
-Add a new entry at the **end** of the `SENSOR_LIBRARY[]` array:
-
-```cpp
-static const PROGMEM SensorInfo SENSOR_LIBRARY[] = {
-    // ... existing sensors ...
-    
-    // My New Sensor
-    {
-        .name = PSTR_MY_NEW_SENSOR,
-        .label = PSTR_MY_NEW_SENSOR_LABEL,
-        .description = nullptr,
-        .readFunction = readThermistorSteinhart,  // Reuse existing function
-        .initFunction = nullptr,                   // No special init needed
-        .measurementType = MEASURE_TEMPERATURE,
-        .calibrationType = CAL_THERMISTOR_STEINHART,
-        .defaultCalibration = &my_custom_thermistor_cal,
-        .minReadInterval = SENSOR_READ_INTERVAL_MS,  // 50ms default
-        .minValue = -40.0,
-        .maxValue = 150.0,
-        .nameHash = 0xABCD,  // From Step 1
-        .pinTypeRequirement = PIN_ANALOG
-    },
-};
-```
-
-**Important:** Add new sensors at the END of the array. The array position doesn't matter for lookups (hash-based), but keeping additions at the end makes diffs cleaner.
+The X_SENSOR macro parameters are:
+1. `name` - PROGMEM name string
+2. `label` - PROGMEM label string
+3. `description` - PROGMEM description (or nullptr)
+4. `readFunction` - Function to read the sensor
+5. `initFunction` - Init function (or nullptr)
+6. `measurementType` - MEASURE_TEMPERATURE, MEASURE_PRESSURE, etc.
+7. `calibrationType` - CAL_THERMISTOR_STEINHART, CAL_LINEAR, etc.
+8. `defaultCalibration` - Pointer to calibration data
+9. `minReadInterval` - Minimum ms between reads
+10. `minValue` - Sensor's physical minimum
+11. `maxValue` - Sensor's physical maximum
+12. `nameHash` - Precomputed hash from Step 1
+13. `pinTypeRequirement` - PIN_ANALOG, PIN_DIGITAL, or PIN_I2C
 
 ### Step 5: Validate
 
@@ -251,40 +270,149 @@ Validating sensor_library.h...
 
 ---
 
-## Adding a New Read Function
+## Adding a New Manufacturer
 
-If your sensor needs a custom read function, add it to `src/inputs/sensor_read.cpp`:
+If you're adding sensors from a new manufacturer not currently in the calibration database, create a new manufacturer directory:
+
+### Step 1: Create Directory and Header
+
+```bash
+mkdir -p src/lib/sensor_calibration_data/bosch/
+```
+
+Create `src/lib/sensor_calibration_data/bosch/bosch_calibrations.h`:
 
 ```cpp
+/*
+ * bosch_calibrations.h - Bosch Sensor Calibration Data
+ *
+ * Contains calibrations for Bosch sensors.
+ * Add description of sensor types covered.
+ */
+
+#ifndef BOSCH_CALIBRATIONS_H
+#define BOSCH_CALIBRATIONS_H
+
+#include <Arduino.h>
+#include "../../sensor_types.h"
+#include "../../../config.h"
+
+// ===== BOSCH SENSOR CALIBRATIONS =====
+
+// Add your calibrations here
+static const PROGMEM LinearCalibration bosch_example_cal = {
+    .voltage_min = 0.5,
+    .voltage_max = 4.5,
+    .output_min = 0.0,
+    .output_max = 5.0
+};
+
+#endif // BOSCH_CALIBRATIONS_H
+```
+
+### Step 2: Register the Manufacturer
+
+Edit `src/lib/sensor_calibration_data.h` to include your new manufacturer file:
+
+```cpp
+#include "sensor_calibration_data/vdo/vdo_calibrations.h"
+#include "sensor_calibration_data/aem/aem_calibrations.h"
+#include "sensor_calibration_data/nxp/nxp_calibrations.h"
+#include "sensor_calibration_data/generic/generic_calibrations.h"
+#include "sensor_calibration_data/system/system_calibrations.h"
+#include "sensor_calibration_data/bosch/bosch_calibrations.h"  // Add this line
+```
+
+### Step 3: Add Sensors to Library
+
+Add your sensors to the appropriate category file in `src/lib/sensor_library/sensors/`, referencing the calibrations from your new manufacturer file.
+
+---
+
+## Adding a New Read Function
+
+If your sensor needs a custom read function, add it to the appropriate subdirectory under `src/inputs/sensors/`.
+
+### Step 1: Determine the Sensor Category
+
+Choose the appropriate subdirectory based on sensor type:
+- **thermistors/** - NTC thermistor sensors
+- **thermocouples/** - Thermocouple sensors (MAX chips, etc.)
+- **pressure/** - Pressure sensors
+- **voltage/** - Voltage measurement
+- **linear/** - Generic linear sensors
+- **rpm/** - RPM/frequency sensors
+- **digital/** - Digital inputs
+- **environmental/** - Environmental sensors
+
+### Step 2: Create Implementation File
+
+For example, adding a new thermistor algorithm to `src/inputs/sensors/thermistors/beta.cpp`:
+
+```cpp
+#include "../../input.h"
+#include "../sensor_utils.h"
+#include <Arduino.h>
+
 /**
- * Read my custom sensor
+ * Read thermistor using simplified beta equation
  * @param input Pointer to Input structure
  */
-void readMyCustomSensor(Input* input) {
+void readThermistorBeta(Input* input) {
     // Get calibration data from PROGMEM
-    MyCustomCalibration cal;
-    memcpy_P(&cal, input->customCalibration, sizeof(MyCustomCalibration));
-    
-    // Read the sensor
+    ThermistorBetaCalibration cal;
+    memcpy_P(&cal, input->customCalibration, sizeof(ThermistorBetaCalibration));
+
+    // Read ADC and convert to resistance
     int rawValue = analogRead(input->pin);
-    
-    // Convert to engineering units
-    float result = /* your conversion math */;
-    
+    float resistance = calculateResistance(rawValue, cal.bias_resistor);
+
+    // Beta equation: 1/T = 1/T0 + (1/B)*ln(R/R0)
+    float invT = (1.0 / (cal.t0 + 273.15)) +
+                 (1.0 / cal.beta) * log(resistance / cal.r0);
+    float tempC = (1.0 / invT) - 273.15;
+
     // Validate and store result
-    if (result < input->minValue || result > input->maxValue) {
-        input->value = NAN;  // Invalid reading
+    if (tempC < input->minValue || tempC > input->maxValue) {
+        input->value = NAN;
     } else {
-        input->value = result;
+        input->value = tempC;
     }
 }
 ```
 
-Declare it in `src/inputs/sensor_read.h`:
+### Step 3: Declare in Header
+
+Add the declaration to the corresponding header (create if needed). For thermistors, you might add to `src/inputs/sensors/thermistors/thermistor_read.h`:
 
 ```cpp
-void readMyCustomSensor(Input* input);
+#ifndef THERMISTOR_READ_H
+#define THERMISTOR_READ_H
+
+#include "../../input.h"
+
+void readThermistorSteinhart(Input* input);
+void readThermistorLookup(Input* input);
+void readThermistorBeta(Input* input);  // Add your new function
+
+#endif
 ```
+
+### Step 4: Include in Main Build
+
+Make sure the header is included in `src/inputs/sensor_read.h` (the main orchestrator):
+
+```cpp
+// Thermistor sensors
+#include "sensors/thermistors/thermistor_read.h"
+```
+
+### Benefits of Modular Organization
+
+- **Clear organization**: Related sensor types grouped together
+- **Easier maintenance**: Changes isolated to specific sensor type
+- **Reusable utilities**: Shared functions in sensor_utils.*
+- **Scalability**: Easy to add new sensor categories
 
 ---
 
@@ -340,7 +468,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
 |------|-----------|----------|
 | `CAL_NONE` | None | Sensors that don't need calibration (thermocouples) |
 | `CAL_THERMISTOR_STEINHART` | `ThermistorSteinhartCalibration` | NTC thermistors with S-H coefficients |
-| `CAL_THERMISTOR_LOOKUP` | `ThermistorLookupCalibration` | Thermistors with lookup tables |
+| `CAL_THERMISTOR_TABLE` | `ThermistorLookupCalibration` | Thermistors with lookup tables |
 | `CAL_PRESSURE_LINEAR` | `PressureLinearCalibration` | Linear voltage-to-pressure sensors |
 | `CAL_PRESSURE_POLYNOMIAL` | `PressurePolynomialCalibration` | VDO-style resistive pressure sensors |
 | `CAL_VOLTAGE_DIVIDER` | `VoltageDividerCalibration` | Voltage divider circuits |
@@ -350,18 +478,24 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
 
 ## Read Functions Reference
 
-| Function | Input Type | Output | Sensors |
-|----------|------------|--------|---------|
-| `readThermistorSteinhart` | Analog | °C | NTC thermistors |
-| `readThermistorLookup` | Analog | °C | Thermistors with tables |
-| `readMAX6675` | SPI | °C | MAX6675 K-type |
-| `readMAX31855` | SPI | °C | MAX31855 K-type |
-| `readLinearSensor` | Analog | varies | 0.5-4.5V sensors |
-| `readPressurePolynomial` | Analog | bar | VDO resistive pressure |
-| `readVoltageDivider` | Analog | V | Battery voltage |
-| `readWPhaseRPM` | Interrupt | RPM | Alternator W-phase |
-| `readDigitalFloatSwitch` | Digital | 0/1 | Float switches |
-| `readBME280Temp` | I2C | °C | BME280 environmental |
+Read functions are organized in `src/inputs/sensors/` by sensor type.
+
+| Function | Input Type | Output | Location | Sensors |
+|----------|------------|--------|----------|---------|
+| `readThermistorSteinhart` | Analog | °C | sensors/thermistors/ | NTC thermistors |
+| `readThermistorLookup` | Analog | °C | sensors/thermistors/ | Thermistors with tables |
+| `readThermistorBeta` | Analog | °C | sensors/thermistors/ | Beta equation thermistors |
+| `readLinearThermistor` | Analog | °C | sensors/thermistors/ | Linear thermistors |
+| `readMAX6675` | SPI | °C | sensors/thermocouples/ | MAX6675 K-type |
+| `readMAX31855` | SPI | °C | sensors/thermocouples/ | MAX31855 K-type |
+| `readLinearSensor` | Analog | varies | sensors/linear/ | 0.5-4.5V sensors |
+| `readPressureLinear` | Analog | bar | sensors/pressure/ | Linear voltage pressure |
+| `readPressurePolynomial` | Analog | bar | sensors/pressure/ | VDO resistive pressure |
+| `readVoltageDirect` | Analog | V | sensors/voltage/ | Direct voltage |
+| `readVoltageDivider` | Analog | V | sensors/voltage/ | Battery voltage divider |
+| `readWPhaseRPM` | Interrupt | RPM | sensors/rpm/ | Alternator W-phase |
+| `readDigitalFloatSwitch` | Digital | 0/1 | sensors/digital/ | Float switches |
+| `readBME280Temp` | I2C | °C | sensors/environmental/ | BME280 environmental |
 
 ---
 
@@ -401,6 +535,3 @@ If you've added a useful sensor type, consider contributing it back:
 - **[ADVANCED_CALIBRATION_GUIDE.md](ADVANCED_CALIBRATION_GUIDE.md)** - Custom calibration for existing sensors
 - **[SENSOR_SELECTION_GUIDE.md](../sensor-types/SENSOR_SELECTION_GUIDE.md)** - Available sensors
 
----
-
-**For the classic car community.**

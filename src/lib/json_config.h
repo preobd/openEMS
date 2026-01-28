@@ -3,7 +3,7 @@
  *
  * Provides JSON serialization and deserialization for system configuration.
  * Used for:
- * - DUMP JSON command (export to serial)
+ * - SYSTEM DUMP JSON command (export to serial)
  * - CONFIG SAVE <filename> (export to SD card)
  * - CONFIG LOAD <filename> (import from SD card)
  *
@@ -47,6 +47,10 @@ bool importInputFromJSON(JsonObject& inputObj, uint8_t index);
 // SD card backup/restore (always available, independent of ENABLE_SD_LOGGING)
 bool saveConfigToSD(const char* filename = nullptr);
 bool loadConfigFromSD(const char* filename);
+
+// URI-style file path dispatchers
+bool saveConfigToFile(const char* destination, const char* filename);
+bool loadConfigFromFile(const char* destination, const char* filename);
 
 #endif // USE_STATIC_CONFIG
 #endif // JSON_CONFIG_H

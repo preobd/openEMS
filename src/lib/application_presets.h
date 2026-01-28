@@ -28,6 +28,7 @@
 #include <Arduino.h>
 #include "../inputs/input.h"
 #include "hash.h"
+#include "generated/registry_enums.h"
 
 // ===== APPLICATION PRESET STRUCTURE =====
 struct ApplicationPreset {
@@ -81,7 +82,7 @@ static const char PSTR_OIL_PRESSURE_ABBR[] PROGMEM = " OP";
 static const char PSTR_OIL_PRESSURE_LABEL[] PROGMEM = "Oil Pressure";
 
 static const char PSTR_BOOST_PRESSURE[] PROGMEM = "BOOST_PRESSURE";
-static const char PSTR_BOOST_PRESSURE_ABBR[] PROGMEM = "MAP";
+static const char PSTR_BOOST_PRESSURE_ABBR[] PROGMEM = "BST";
 static const char PSTR_BOOST_PRESSURE_LABEL[] PROGMEM = "Turbo Boost Pressure";
 
 static const char PSTR_FUEL_PRESSURE[] PROGMEM = "FUEL_PRESSURE";
@@ -116,6 +117,10 @@ static const char PSTR_ENGINE_RPM[] PROGMEM = "ENGINE_RPM";
 static const char PSTR_ENGINE_RPM_ABBR[] PROGMEM = "RPM";
 static const char PSTR_ENGINE_RPM_LABEL[] PROGMEM = "Engine RPM";
 
+static const char PSTR_VEHICLE_SPEED[] PROGMEM = "VEHICLE_SPEED";
+static const char PSTR_VEHICLE_SPEED_ABBR[] PROGMEM = "SPD";
+static const char PSTR_VEHICLE_SPEED_LABEL[] PROGMEM = "Vehicle Speed";
+
 // ===== APPLICATION PRESETS (PROGMEM - Flash Memory) =====
 //
 // To add a new application:
@@ -133,7 +138,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = nullptr,
         .label = nullptr,
         .description = nullptr,
-        .defaultSensor = 0,
+        .defaultSensor = SENSOR_NONE,
         .defaultUnits = 0,
         .defaultMinValue = 0.0,
         .defaultMaxValue = 0.0,
@@ -155,7 +160,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_CHT_ABBR,
         .label = PSTR_CHT_LABEL,
         .description = nullptr,
-        .defaultSensor = 1,
+        .defaultSensor = SENSOR_MAX31855,
         .defaultUnits = 0,
         .defaultMinValue = -1.0,
         .defaultMaxValue = 260.0,
@@ -176,7 +181,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_EGT_ABBR,
         .label = PSTR_EGT_LABEL,
         .description = nullptr,
-        .defaultSensor = 2,
+        .defaultSensor = SENSOR_MAX31855,
         .defaultUnits = 0,
         .defaultMinValue = -1.0,
         .defaultMaxValue = 600.0,
@@ -197,7 +202,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_COOLANT_TEMP_ABBR,
         .label = PSTR_COOLANT_TEMP_LABEL,
         .description = nullptr,
-        .defaultSensor = 3,
+        .defaultSensor = SENSOR_VDO_120C_STEINHART,
         .defaultUnits = 0,
         .defaultMinValue = -1.0,
         .defaultMaxValue = 100.0,
@@ -218,7 +223,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_OIL_TEMP_ABBR,
         .label = PSTR_OIL_TEMP_LABEL,
         .description = nullptr,
-        .defaultSensor = 6,
+        .defaultSensor = SENSOR_VDO_150C_STEINHART,
         .defaultUnits = 0,
         .defaultMinValue = -1.0,
         .defaultMaxValue = 150.0,
@@ -239,7 +244,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_TCASE_TEMP_ABBR,
         .label = PSTR_TCASE_TEMP_LABEL,
         .description = nullptr,
-        .defaultSensor = 3,
+        .defaultSensor = SENSOR_VDO_120C_STEINHART,
         .defaultUnits = 0,
         .defaultMinValue = -1.0,
         .defaultMaxValue = 100.0,
@@ -260,7 +265,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_AMBIENT_TEMP_ABBR,
         .label = PSTR_AMBIENT_TEMP_LABEL,
         .description = nullptr,
-        .defaultSensor = 15,
+        .defaultSensor = SENSOR_BME280_TEMP,
         .defaultUnits = 0,
         .defaultMinValue = 0.0,
         .defaultMaxValue = 0.0,
@@ -282,7 +287,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_OIL_PRESSURE_ABBR,
         .label = PSTR_OIL_PRESSURE_LABEL,
         .description = nullptr,
-        .defaultSensor = 12,
+        .defaultSensor = SENSOR_VDO_5BAR_CURVE,
         .defaultUnits = 2,
         .defaultMinValue = 1.0,
         .defaultMaxValue = 5.0,
@@ -303,7 +308,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_BOOST_PRESSURE_ABBR,
         .label = PSTR_BOOST_PRESSURE_LABEL,
         .description = nullptr,
-        .defaultSensor = 11,
+        .defaultSensor = SENSOR_VDO_2BAR_CURVE,
         .defaultUnits = 2,
         .defaultMinValue = -1.0,
         .defaultMaxValue = 2.0,
@@ -324,7 +329,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_FUEL_PRESSURE_ABBR,
         .label = nullptr,
         .description = nullptr,
-        .defaultSensor = 0,
+        .defaultSensor = SENSOR_NONE,
         .defaultUnits = 2,
         .defaultMinValue = 0.0,
         .defaultMaxValue = 0.0,
@@ -345,7 +350,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_BAROMETRIC_PRESSURE_ABBR,
         .label = PSTR_BAROMETRIC_PRESSURE_LABEL,
         .description = nullptr,
-        .defaultSensor = 16,
+        .defaultSensor = SENSOR_BME280_PRESSURE,
         .defaultUnits = 2,
         .defaultMinValue = 0.0,
         .defaultMaxValue = 0.0,
@@ -367,7 +372,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_PRIMARY_BATTERY_ABBR,
         .label = PSTR_PRIMARY_BATTERY_LABEL,
         .description = nullptr,
-        .defaultSensor = 13,
+        .defaultSensor = SENSOR_VOLTAGE_DIVIDER,
         .defaultUnits = 6,
         .defaultMinValue = 10.0,
         .defaultMaxValue = 15.0,
@@ -388,7 +393,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_AUXILIARY_BATTERY_ABBR,
         .label = PSTR_AUXILIARY_BATTERY_LABEL,
         .description = nullptr,
-        .defaultSensor = 13,
+        .defaultSensor = SENSOR_VOLTAGE_DIVIDER,
         .defaultUnits = 6,
         .defaultMinValue = 0.0,
         .defaultMaxValue = 0.0,
@@ -410,7 +415,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_COOLANT_LEVEL_ABBR,
         .label = PSTR_COOLANT_LEVEL_LABEL,
         .description = nullptr,
-        .defaultSensor = 19,
+        .defaultSensor = SENSOR_FLOAT_SWITCH,
         .defaultUnits = 8,
         .defaultMinValue = 0.0,
         .defaultMaxValue = 1.0,
@@ -432,7 +437,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_HUMIDITY_ABBR,
         .label = PSTR_HUMIDITY_LABEL,
         .description = nullptr,
-        .defaultSensor = 17,
+        .defaultSensor = SENSOR_BME280_HUMIDITY,
         .defaultUnits = 8,
         .defaultMinValue = 0.0,
         .defaultMaxValue = 0.0,
@@ -453,7 +458,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_ELEVATION_ABBR,
         .label = PSTR_ELEVATION_LABEL,
         .description = nullptr,
-        .defaultSensor = 18,
+        .defaultSensor = SENSOR_BME280_ELEVATION,
         .defaultUnits = 9,
         .defaultMinValue = 0.0,
         .defaultMaxValue = 0.0,
@@ -475,7 +480,7 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .abbreviation = PSTR_ENGINE_RPM_ABBR,
         .label = nullptr,
         .description = nullptr,
-        .defaultSensor = 0,
+        .defaultSensor = SENSOR_W_PHASE_RPM,
         .defaultUnits = 7,
         .defaultMinValue = 0.0,
         .defaultMaxValue = 0.0,
@@ -486,6 +491,27 @@ static const PROGMEM ApplicationPreset APPLICATION_PRESETS[] = {
         .expectedMeasurementType = MEASURE_RPM,
         .nameHash = 0x4429,  // djb2_hash("ENGINE_RPM")
         .warmupTime_ms = 2000,  // 2 seconds warmup
+        .persistTime_ms = 0  // No persistence needed
+    },
+
+    // ===== SPEED APPLICATIONS =====
+    // Index 17: VEHICLE_SPEED
+    {
+        .name = PSTR_VEHICLE_SPEED,
+        .abbreviation = PSTR_VEHICLE_SPEED_ABBR,
+        .label = PSTR_VEHICLE_SPEED_LABEL,
+        .description = nullptr,
+        .defaultSensor = SENSOR_HALL_SPEED,
+        .defaultUnits = 11,  // KPH
+        .defaultMinValue = 0.0,
+        .defaultMaxValue = 0.0,  // No alarm by default (informational only)
+        .obd2pid = 0x0D,  // OBD-II PID 0x0D: Vehicle Speed
+        .obd2length = 1,  // Single byte response
+        .defaultAlarmEnabled = false,
+        .defaultDisplayEnabled = true,
+        .expectedMeasurementType = MEASURE_SPEED,
+        .nameHash = 0x46F5,  // djb2_hash("VEHICLE_SPEED")
+        .warmupTime_ms = 0,  // No warmup needed
         .persistTime_ms = 0  // No persistence needed
     }
 };

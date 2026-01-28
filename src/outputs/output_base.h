@@ -7,7 +7,11 @@
 
 #include "../inputs/input.h"
 #include "../lib/sensor_types.h"
+#ifdef USE_STATIC_CONFIG
+#include "../lib/generated/sensor_library_static.h"
+#else
 #include "../lib/sensor_library.h"
+#endif
 #include "../lib/system_config.h"  // For OutputID enum
 
 // Output module structure
@@ -29,7 +33,8 @@ void updateOutputs();              // Housekeeping (drain buffers, etc.)
 bool setOutputEnabled(const char* name, bool enabled);
 bool setOutputInterval(const char* name, uint16_t interval);
 OutputModule* getOutputByName(const char* name);
-void listOutputs();
+void listOutputs();          // Show output status (enabled/disabled + intervals)
+void listOutputModules();    // Show available output module names
 
 // ===== OBDII FRAME BUILDING =====
 

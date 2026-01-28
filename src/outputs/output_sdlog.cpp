@@ -6,39 +6,46 @@
 #include "output_base.h"
 #include "../config.h"
 #include "../lib/sensor_library.h"
+#include "../lib/units_registry.h"
+#include "../lib/message_api.h"
+#include "../lib/log_tags.h"
 
 #ifdef ENABLE_SD_LOGGING
 
+// Use Arduino SD library for consistency across platforms
 #include <SD.h>
+#include "../lib/sd_manager.h"
+
+// SD object is provided globally by SD.h
 
 File logFile;
 unsigned long lastLogTime = 0;
 const unsigned long LOG_INTERVAL = 1000;  // Log every 1 second
 
 void initSDLog() {
-    Serial.print("Initializing SD card...");
-    
-    if (!SD.begin(SD_CS_PIN)) {
-        Serial.println("SD init failed!");
+    // SD card is already initialized by initSD() in main setup()
+    // Just check if it's available and create log file
+
+    if (!isSDInitialized()) {
+        msg.debug.warn(TAG_SD, "SD logging failed - SD card not initialized");
         return;
     }
-    
-    Serial.println("SD card ready");
-    
+
+    msg.debug.info(TAG_SD, "SD card ready for logging");
+
     // Create or open log file with timestamp
     char filename[20];
     snprintf(filename, sizeof(filename), "log_%lu.csv", millis());
-    
+
     logFile = SD.open(filename, FILE_WRITE);
-    
+
     if (logFile) {
         // Write CSV header
         logFile.println("Time,Sensor,Value,Units");
         logFile.flush();
-        Serial.print("Logging to: ");
-        Serial.println(filename);
+        msg.debug.info(TAG_SD, "Logging to: %s", filename);
     } else {
-        Serial.println("Failed to create log file");
+        msg.debug.error(TAG_SD, "Failed to create log file");
     }
 }
 
@@ -86,7 +93,7 @@ void updateSDLog() {
 void closeSDLog() {
     if (logFile) {
         logFile.close();
-        Serial.println("Log file closed");
+        msg.debug.info(TAG_SD, "Log file closed");
     }
 }
 

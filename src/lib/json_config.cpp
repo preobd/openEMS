@@ -12,17 +12,24 @@
 
 #include "json_config.h"
 #include "system_config.h"
+#include "bus_defaults.h"
+#include "serial_manager.h"
 #include "../inputs/input.h"
 #include "../inputs/input_manager.h"
 #include "units_registry.h"
 #include "sensor_library.h"
 #include "application_presets.h"
 #include "../version.h"
+#include "message_api.h"
+#include "log_tags.h"
+#include "pin_registry.h"
+#include "watchdog.h"
 
-// SD library is built-in to Arduino framework
-#if defined(ARDUINO)
+// Use Arduino SD library for consistency across platforms
 #include <SD.h>
-#endif
+#include "sd_manager.h"
+
+// SD object is provided globally by SD.h
 
 // External references
 extern Input inputs[MAX_INPUTS];
@@ -68,7 +75,8 @@ static const char* getCalibrationType(const Input* input) {
         case CAL_NONE: return "NONE";
         case CAL_THERMISTOR_STEINHART: return "THERMISTOR_STEINHART";
         case CAL_THERMISTOR_BETA: return "THERMISTOR_BETA";
-        case CAL_THERMISTOR_LOOKUP: return "THERMISTOR_LOOKUP";
+        case CAL_THERMISTOR_TABLE: return "THERMISTOR_TABLE";
+        case CAL_PRESSURE_TABLE: return "PRESSURE_TABLE";
         case CAL_PRESSURE_POLYNOMIAL: return "PRESSURE_POLYNOMIAL";
         case CAL_LINEAR: return "LINEAR";
         case CAL_VOLTAGE_DIVIDER: return "VOLTAGE_DIVIDER";
@@ -104,7 +112,12 @@ static void exportCalibration(JsonObject& calObj, const Input* input) {
             params["t0"] = input->customCalibration.beta.t0;
             break;
 
-        case CAL_THERMISTOR_LOOKUP:
+        case CAL_THERMISTOR_TABLE:
+            params["biasResistor"] = input->customCalibration.lookup.bias_resistor;
+            break;
+
+        case CAL_PRESSURE_TABLE:
+            // Pressure tables use same union member as thermistor lookup (only bias resistor is customizable)
             params["biasResistor"] = input->customCalibration.lookup.bias_resistor;
             break;
 
@@ -197,12 +210,28 @@ void exportInputsToJSON(JsonArray& inputsArray) {
     }
 }
 
+// Export pin registry to JSON array
+void exportPinRegistryToJSON(JsonArray& pinsArray) {
+    uint8_t count = getPinRegistrySize();
+    for (uint8_t i = 0; i < count; i++) {
+        const PinUsage* pinUsage = getPinUsageByIndex(i);
+        if (pinUsage && pinUsage->type != PIN_UNUSED) {
+            JsonObject pinObj = pinsArray.add<JsonObject>();
+            pinObj["pin"] = pinUsage->pin;
+            pinObj["type"] = getPinUsageTypeName(pinUsage->type);
+            if (pinUsage->description) {
+                pinObj["description"] = pinUsage->description;
+            }
+        }
+    }
+}
+
 // Export system configuration to JSON
 void exportSystemConfigToJSON(JsonObject& systemObj) {
     // Output modules
     JsonObject outputs = systemObj["outputs"].to<JsonObject>();
 
-    const char* outputNames[] = {"can", "realdash", "serial", "sd", "alarm"};
+    const char* outputNames[] = {"can", "realdash", "serial", "sd", "alarm", "relay"};
     for (uint8_t i = 0; i < NUM_OUTPUTS; i++) {
         JsonObject output = outputs[outputNames[i]].to<JsonObject>();
         output["enabled"] = (bool)systemConfig.outputEnabled[i];
@@ -225,29 +254,59 @@ void exportSystemConfigToJSON(JsonObject& systemObj) {
     snprintf(addrBuf, sizeof(addrBuf), "0x%02X", systemConfig.lcdI2CAddress);
     display["address"] = addrBuf;
 
+    display["updateInterval"] = systemConfig.lcdUpdateInterval;
+
     JsonObject defaultUnits = display["defaultUnits"].to<JsonObject>();
     defaultUnits["temperature"] = reinterpret_cast<const char*>(getUnitStringByIndex(systemConfig.defaultTempUnits));
     defaultUnits["pressure"] = reinterpret_cast<const char*>(getUnitStringByIndex(systemConfig.defaultPressUnits));
     defaultUnits["elevation"] = reinterpret_cast<const char*>(getUnitStringByIndex(systemConfig.defaultElevUnits));
+    defaultUnits["speed"] = reinterpret_cast<const char*>(getUnitStringByIndex(systemConfig.defaultSpeedUnits));
 
     // Timing intervals
     JsonObject timing = systemObj["timing"].to<JsonObject>();
     timing["sensorRead"] = systemConfig.sensorReadInterval;
     timing["alarmCheck"] = systemConfig.alarmCheckInterval;
-    timing["lcdUpdate"] = systemConfig.lcdUpdateInterval;
 
-    // Hardware pins
-    JsonObject pins = systemObj["pins"].to<JsonObject>();
-    pins["modeButton"] = systemConfig.modeButtonPin;
-    pins["buzzer"] = systemConfig.buzzerPin;
-    pins["canCS"] = systemConfig.canCSPin;
-    pins["canInt"] = systemConfig.canIntPin;
-    pins["sdCS"] = systemConfig.sdCSPin;
-    pins["testMode"] = systemConfig.testModePin;
+    // Export all registered pins from pin registry
+    // This includes system pins (button, buzzer, chip selects), bus pins, and any other registered pins
+    JsonArray pins = systemObj["pins"].to<JsonArray>();
+    exportPinRegistryToJSON(pins);
 
     // Physical constants
     JsonObject constants = systemObj["constants"].to<JsonObject>();
     constants["seaLevelPressure"] = systemConfig.seaLevelPressure;
+
+    // Bus Configuration
+    JsonObject buses = systemObj["buses"].to<JsonObject>();
+    buses["i2c"] = systemConfig.buses.active_i2c;
+    buses["i2cClock"] = systemConfig.buses.i2c_clock;
+    buses["spi"] = systemConfig.buses.active_spi;
+    buses["spiClock"] = systemConfig.buses.spi_clock;
+    buses["can"] = systemConfig.buses.active_can;
+    buses["canBaudrate"] = systemConfig.buses.can_baudrate;
+
+    // Serial Port Configuration
+    JsonObject serial = systemObj["serial"].to<JsonObject>();
+    serial["enabledMask"] = systemConfig.serial.enabled_mask;
+    JsonArray serialPorts = serial["ports"].to<JsonArray>();
+    for (uint8_t i = 0; i < NUM_SERIAL_PORTS; i++) {
+        JsonObject port = serialPorts.add<JsonObject>();
+        uint8_t port_id = i + 1;
+        port["port"] = port_id;
+        port["enabled"] = (bool)(systemConfig.serial.enabled_mask & (1 << i));
+        port["baudrate"] = getBaudRateFromIndex(systemConfig.serial.baudrate_index[i]);
+    }
+
+    // Log Filter Configuration
+    JsonObject logFilter = systemObj["logFilter"].to<JsonObject>();
+    const char* levelNames[] = {"NONE", "ERROR", "WARN", "INFO", "DEBUG"};
+    logFilter["controlLevel"] = systemConfig.logFilter.control_level <= 4 ? levelNames[systemConfig.logFilter.control_level] : "UNKNOWN";
+    logFilter["dataLevel"] = systemConfig.logFilter.data_level <= 4 ? levelNames[systemConfig.logFilter.data_level] : "UNKNOWN";
+    logFilter["debugLevel"] = systemConfig.logFilter.debug_level <= 4 ? levelNames[systemConfig.logFilter.debug_level] : "UNKNOWN";
+
+    char tagsBuf[11];  // "0xFFFFFFFF" + null terminator
+    snprintf(tagsBuf, sizeof(tagsBuf), "0x%08lX", (unsigned long)systemConfig.logFilter.enabledTags);
+    logFilter["enabledTags"] = tagsBuf;
 }
 
 // JSON Schema Version
@@ -267,7 +326,13 @@ void dumpConfigToJSON(Print& output) {
 
     // Firmware info
     JsonObject firmware = doc["firmware"].to<JsonObject>();
-    firmware["version"] = FIRMWARE_VERSION;
+    firmware["version"] = firmwareVersionString();
+    firmware["major"] = FW_MAJOR;
+    firmware["minor"] = FW_MINOR;
+    firmware["patch"] = FW_PATCH;
+    firmware["prerelease"] = FW_PRERELEASE;
+    firmware["build"] = firmwareVersion();
+    firmware["gitHash"] = FW_GIT_HASH;
     firmware["platform"] = getPlatformString();
     firmware["timestamp"] = getCurrentTimestamp();
     firmware["maxInputs"] = MAX_INPUTS;
@@ -317,17 +382,68 @@ bool importInputFromJSON(JsonObject& inputObj, uint8_t index) {
 
     // Extract values
     uint8_t pin = inputObj["pin"];
+
+    // Support both "app" (runtime) and "application" (static/legacy) field names
     const char* appName = inputObj["app"];
+    if (appName == nullptr) {
+        appName = inputObj["application"];
+    }
+
     const char* sensorName = inputObj["sensor"];
     const char* unitsName = inputObj["units"];
+
+    msg.debug.debug(TAG_JSON, "Processing input %d (pin %d): app=%s, sensor=%s, units=%s",
+                    index, pin,
+                    appName ? appName : "NULL",
+                    sensorName ? sensorName : "NULL",
+                    unitsName ? unitsName : "NULL");
+
+    // Validate required fields are present
+    if (!appName || !sensorName || !unitsName) {
+        msg.control.print(F("ERROR: Failed to import input "));
+        msg.control.print(index);
+        msg.control.print(F(" (pin "));
+        msg.control.print(pin);
+        msg.control.println(F(") - missing required fields"));
+
+        if (!appName) {
+            msg.debug.error(TAG_JSON, "Missing application field");
+        }
+        if (!sensorName) {
+            msg.debug.error(TAG_JSON, "Missing sensor field");
+        }
+        if (!unitsName) {
+            msg.debug.error(TAG_JSON, "Missing units field");
+        }
+
+        return false;
+    }
 
     // Find indices in registries
     uint8_t appIdx = getApplicationIndexByName(appName);
     uint8_t sensorIdx = getSensorIndexByName(sensorName);
     uint8_t unitsIdx = getUnitsIndexByName(unitsName);
 
-    if (appIdx == 0 || sensorIdx == 0 || unitsIdx == 0) {
-        return false;  // Invalid registry entry (0 = NONE)
+    msg.debug.debug(TAG_JSON, "Registry indices: app=%d, sensor=%d, units=%d", appIdx, sensorIdx, unitsIdx);
+
+    // Validate registry lookups (index 0 = NONE for app/sensor, but CELSIUS for units)
+    // Note: Units index 0 is CELSIUS (valid), so we can't use 0 to detect lookup failure
+    // Instead, we rely on the NULL check above to ensure unitsName exists
+    if (appIdx == 0 || sensorIdx == 0) {
+        msg.control.print(F("ERROR: Failed to import input "));
+        msg.control.print(index);
+        msg.control.print(F(" (pin "));
+        msg.control.print(pin);
+        msg.control.println(F(")"));
+
+        if (appIdx == 0) {
+            msg.debug.error(TAG_JSON, "Invalid application: %s", appName);
+        }
+        if (sensorIdx == 0) {
+            msg.debug.error(TAG_JSON, "Invalid sensor: %s", sensorName);
+        }
+
+        return false;  // Invalid registry entry (0 = NONE for app/sensor)
     }
 
     // Use input manager functions to properly configure the input
@@ -366,10 +482,10 @@ bool importInputFromJSON(JsonObject& inputObj, uint8_t index) {
         setInputAlarmRange(pin, alarm["min"], alarm["max"]);
     }
 
-    // Set flags
-    enableInput(pin, inputObj["enabled"] | true);
-    enableInputAlarm(pin, inputObj["alarmEnabled"] | true);
-    enableInputDisplay(pin, inputObj["displayEnabled"] | true);
+    // Set flags (use || for default value, not | which is bitwise OR)
+    enableInput(pin, inputObj["enabled"] | true);  // Default to true if missing
+    enableInputAlarm(pin, inputObj["alarmEnabled"] | false);  // Default to false if missing
+    enableInputDisplay(pin, inputObj["displayEnabled"] | true);  // Default to true if missing
 
     // OBD2
     if (inputObj["obd2"].isNull() == false) {
@@ -389,6 +505,9 @@ bool importInputFromJSON(JsonObject& inputObj, uint8_t index) {
 // Import all inputs from JSON
 bool importInputsFromJSON(JsonArray& inputsArray) {
     uint8_t importedCount = 0;
+    uint8_t totalInputs = inputsArray.size();
+
+    msg.debug.info(TAG_JSON, "Processing %d inputs from JSON", totalInputs);
 
     for (JsonVariant v : inputsArray) {
         JsonObject inputObj = v.as<JsonObject>();
@@ -396,8 +515,13 @@ bool importInputsFromJSON(JsonArray& inputsArray) {
 
         if (importInputFromJSON(inputObj, idx)) {
             importedCount++;
+            msg.debug.debug(TAG_JSON, "Successfully imported input %d", idx);
+        } else {
+            msg.debug.warn(TAG_JSON, "Failed to import input %d", idx);
         }
     }
+
+    msg.debug.info(TAG_JSON, "Import complete: %d of %d inputs imported", importedCount, totalInputs);
 
     numActiveInputs = importedCount;
     return importedCount > 0;
@@ -408,7 +532,7 @@ bool importSystemConfigFromJSON(JsonObject& systemObj) {
     // Output modules
     if (systemObj["outputs"].isNull() == false) {
         JsonObject outputs = systemObj["outputs"];
-        const char* outputNames[] = {"can", "realdash", "serial", "sd", "alarm"};
+        const char* outputNames[] = {"can", "realdash", "serial", "sd", "alarm", "relay"};
 
         for (uint8_t i = 0; i < NUM_OUTPUTS; i++) {
             if (outputs[outputNames[i]].isNull() == false) {
@@ -443,6 +567,11 @@ bool importSystemConfigFromJSON(JsonObject& systemObj) {
             }
         }
 
+        // Display update interval
+        if (display["updateInterval"].isNull() == false) {
+            systemConfig.lcdUpdateInterval = display["updateInterval"];
+        }
+
         // Default units
         if (display["defaultUnits"].isNull() == false) {
             JsonObject units = display["defaultUnits"];
@@ -459,6 +588,10 @@ bool importSystemConfigFromJSON(JsonObject& systemObj) {
                 uint8_t idx = getUnitsIndexByName(units["elevation"]);
                 if (idx != 0) systemConfig.defaultElevUnits = idx;
             }
+            if (units["speed"].isNull() == false) {
+                uint8_t idx = getUnitsIndexByName(units["speed"]);
+                if (idx != 0) systemConfig.defaultSpeedUnits = idx;
+            }
         }
     }
 
@@ -467,24 +600,62 @@ bool importSystemConfigFromJSON(JsonObject& systemObj) {
         JsonObject timing = systemObj["timing"];
         systemConfig.sensorReadInterval = timing["sensorRead"];
         systemConfig.alarmCheckInterval = timing["alarmCheck"];
-        systemConfig.lcdUpdateInterval = timing["lcdUpdate"];
+
+        // Backward compatibility: check for lcdUpdate in timing section (old location)
+        if (timing["lcdUpdate"].isNull() == false) {
+            systemConfig.lcdUpdateInterval = timing["lcdUpdate"];
+        }
     }
 
-    // Hardware pins
-    if (systemObj["pins"].isNull() == false) {
-        JsonObject pins = systemObj["pins"];
-        systemConfig.modeButtonPin = pins["modeButton"];
-        systemConfig.buzzerPin = pins["buzzer"];
-        systemConfig.canCSPin = pins["canCS"];
-        systemConfig.canIntPin = pins["canInt"];
-        systemConfig.sdCSPin = pins["sdCS"];
-        systemConfig.testModePin = pins["testMode"];
+    // Hardware pins - extract from pin registry array
+    if (systemObj["pins"].isNull() == false && systemObj["pins"].is<JsonArray>()) {
+        JsonArray pins = systemObj["pins"];
+        for (JsonVariant v : pins) {
+            JsonObject pin = v.as<JsonObject>();
+            const char* desc = pin["description"];
+            uint8_t pinNum = pin["pin"];
+
+            if (desc != nullptr) {
+                if (strcmp(desc, "Mode Button") == 0) {
+                    systemConfig.modeButtonPin = pinNum;
+                } else if (strcmp(desc, "Buzzer") == 0) {
+                    systemConfig.buzzerPin = pinNum;
+                } else if (strcmp(desc, "CAN CS") == 0) {
+                    systemConfig.canCSPin = pinNum;
+                } else if (strcmp(desc, "CAN INT") == 0) {
+                    systemConfig.canIntPin = pinNum;
+                } else if (strcmp(desc, "SD CS") == 0) {
+                    systemConfig.sdCSPin = pinNum;
+                } else if (strcmp(desc, "Test Mode Trigger") == 0) {
+                    systemConfig.testModePin = pinNum;
+                }
+            }
+        }
     }
 
     // Physical constants
     if (systemObj["constants"].isNull() == false) {
         JsonObject constants = systemObj["constants"];
         systemConfig.seaLevelPressure = constants["seaLevelPressure"];
+    }
+
+    // Bus Configuration (with backward-compatible defaults)
+    if (systemObj["buses"].isNull() == false) {
+        JsonObject buses = systemObj["buses"];
+        systemConfig.buses.active_i2c = buses["i2c"] | DEFAULT_I2C_BUS;
+        systemConfig.buses.i2c_clock = buses["i2cClock"] | DEFAULT_I2C_CLOCK;
+        systemConfig.buses.active_spi = buses["spi"] | DEFAULT_SPI_BUS;
+        systemConfig.buses.spi_clock = buses["spiClock"] | DEFAULT_SPI_CLOCK;
+        systemConfig.buses.active_can = buses["can"] | DEFAULT_CAN_BUS;
+        systemConfig.buses.can_baudrate = buses["canBaudrate"] | DEFAULT_CAN_BAUDRATE;
+    } else {
+        // No buses object - use defaults (backward compatibility with old configs)
+        systemConfig.buses.active_i2c = DEFAULT_I2C_BUS;
+        systemConfig.buses.i2c_clock = DEFAULT_I2C_CLOCK;
+        systemConfig.buses.active_spi = DEFAULT_SPI_BUS;
+        systemConfig.buses.spi_clock = DEFAULT_SPI_CLOCK;
+        systemConfig.buses.active_can = DEFAULT_CAN_BUS;
+        systemConfig.buses.can_baudrate = DEFAULT_CAN_BAUDRATE;
     }
 
     return true;
@@ -499,8 +670,8 @@ bool loadConfigFromJSON(const char* jsonString) {
     DeserializationError error = deserializeJson(doc, jsonString);
 
     if (error) {
-        Serial.print(F("ERROR: JSON parse failed: "));
-        Serial.println(error.c_str());
+        msg.control.print(F("ERROR: JSON parse failed: "));
+        msg.control.println(error.c_str());
         return false;
     }
 
@@ -508,16 +679,16 @@ bool loadConfigFromJSON(const char* jsonString) {
     uint8_t schemaVer = doc["schemaVersion"] | 1;  // Default to v1 if missing (old configs)
 
     if (schemaVer != JSON_SCHEMA_VERSION) {
-        Serial.print(F("ERROR: Only schemaVersion 1 is supported. Got: "));
-        Serial.println(schemaVer);
+        msg.control.print(F("ERROR: Only schemaVersion 1 is supported. Got: "));
+        msg.control.println(schemaVer);
         return false;
     }
 
     // Validate mode field
     const char* mode = doc["mode"] | "runtime";
     if (strcmp(mode, "runtime") != 0) {
-        Serial.print(F("ERROR: Only mode='runtime' configs can be imported. Got: "));
-        Serial.println(mode);
+        msg.control.print(F("ERROR: Only mode='runtime' configs can be imported. Got: "));
+        msg.control.println(mode);
         return false;
     }
 
@@ -525,7 +696,7 @@ bool loadConfigFromJSON(const char* jsonString) {
     if (doc["system"].isNull() == false) {
         JsonObject system = doc["system"];
         if (!importSystemConfigFromJSON(system)) {
-            Serial.println(F("ERROR: Failed to import system config"));
+            msg.control.println(F("ERROR: Failed to import system config"));
             return false;
         }
     }
@@ -534,31 +705,42 @@ bool loadConfigFromJSON(const char* jsonString) {
     if (doc["inputs"].isNull() == false) {
         JsonArray inputsArray = doc["inputs"];
         if (!importInputsFromJSON(inputsArray)) {
-            Serial.println(F("ERROR: Failed to import inputs"));
+            msg.control.println(F("ERROR: Failed to import inputs"));
             return false;
         }
     }
 
-    Serial.print(F("Successfully loaded config (schema v"));
-    Serial.print(schemaVer);
-    Serial.println(F(")"));
+    msg.control.print(F("Successfully loaded config (schema v"));
+    msg.control.print(schemaVer);
+    msg.control.println(F(")"));
 
     return true;
 }
 
 // Save configuration to SD card
 bool saveConfigToSD(const char* filename) {
-    pinMode(systemConfig.sdCSPin, OUTPUT);
-    digitalWrite(systemConfig.sdCSPin, LOW);
+    msg.debug.info(TAG_SD, "Starting save operation");
 
-    if (!SD.begin(systemConfig.sdCSPin)) {
-        Serial.println(F("ERROR: SD card initialization failed"));
+    // Check if SD card is initialized (done in main setup)
+    if (!isSDInitialized()) {
+        msg.control.println(F("ERROR: SD card not initialized"));
+        msg.debug.warn(TAG_SD, "SD card not available");
         return false;
     }
 
+    msg.debug.debug(TAG_SD, "SD card is ready");
+
     // Create config directory if it doesn't exist
-    if (!SD.exists("/config")) {
-        SD.mkdir("/config");
+    msg.debug.debug(TAG_SD, "Checking for config directory");
+    if (!SD.exists("config")) {
+        msg.debug.debug(TAG_SD, "Creating config directory");
+        if (!SD.mkdir("config")) {
+            msg.debug.error(TAG_SD, "Failed to create config directory");
+        } else {
+            msg.debug.debug(TAG_SD, "config directory created");
+        }
+    } else {
+        msg.debug.debug(TAG_SD, "config directory exists");
     }
 
     // Generate filename if not provided
@@ -566,80 +748,218 @@ bool saveConfigToSD(const char* filename) {
     if (filename == nullptr) {
         snprintf(filepath, sizeof(filepath), "/config/backup_%lu.json", getCurrentTimestamp());
     } else {
-        // Ensure filename is in /config directory
+        // Ensure filename is in config directory
         if (filename[0] == '/') {
-            strncpy(filepath, filename, sizeof(filepath) - 1);
+            snprintf(filepath, sizeof(filepath), "/config%s", filename);
         } else {
             snprintf(filepath, sizeof(filepath), "/config/%s", filename);
         }
     }
     filepath[sizeof(filepath) - 1] = '\0';
 
+    msg.debug.info(TAG_SD, "Opening file: %s", filepath);
+
+    // If file exists, remove it first (FILE_WRITE appends, we want to replace)
+    if (SD.exists(filepath)) {
+        msg.debug.debug(TAG_SD, "File exists, removing");
+        if (!SD.remove(filepath)) {
+            msg.debug.warn(TAG_SD, "Failed to remove existing file");
+        }
+    }
+
     // Open file for writing
     File configFile = SD.open(filepath, FILE_WRITE);
     if (!configFile) {
-        Serial.print(F("ERROR: Failed to open file: "));
-        Serial.println(filepath);
+        msg.debug.error(TAG_SD, "Failed to open file for writing");
+        msg.control.print(F("ERROR: Failed to open file: "));
+        msg.control.println(filepath);
+        // Re-enable watchdog before returning
+        watchdogEnable(2000);
+        msg.debug.debug(TAG_SD, "Watchdog re-enabled");
         return false;
     }
+
+    msg.debug.debug(TAG_SD, "File opened successfully");
+    msg.debug.debug(TAG_SD, "Writing JSON...");
 
     // Write JSON to file
     dumpConfigToJSON(configFile);
 
+    msg.debug.debug(TAG_SD, "JSON write complete");
+    msg.debug.debug(TAG_SD, "Closing file...");
     configFile.close();
-    digitalWrite(systemConfig.sdCSPin, HIGH);
+    msg.debug.debug(TAG_SD, "File closed");
 
+    // Re-enable watchdog after SD operations complete
+    watchdogEnable(2000);
+    msg.debug.debug(TAG_SD, "Watchdog re-enabled");
 
-    Serial.print(F("Configuration saved to: "));
-    Serial.println(filepath);
+    msg.control.print(F("Configuration saved to: "));
+    msg.control.println(filepath);
+    msg.debug.info(TAG_SD, "Save operation completed successfully");
 
     return true;
 }
 
 // Load configuration from SD card
 bool loadConfigFromSD(const char* filename) {
-    pinMode(systemConfig.sdCSPin, OUTPUT);
-    digitalWrite(systemConfig.sdCSPin, LOW);
-    
-    if (!SD.begin(systemConfig.sdCSPin)) {
-        Serial.println(F("ERROR: SD card initialization failed"));
+    msg.debug.info(TAG_SD, "Starting load operation");
+
+    // Check if SD card is initialized (done in main setup)
+    if (!isSDInitialized()) {
+        msg.control.println(F("ERROR: SD card not initialized"));
+        msg.debug.warn(TAG_SD, "SD card not available");
         return false;
     }
 
-    // Construct full path
+    msg.debug.debug(TAG_SD, "SD card is ready");
+
+    // Generate filename with same logic as save
     char filepath[32];
-    if (filename[0] == '/') {
-        strncpy(filepath, filename, sizeof(filepath) - 1);
+    if (filename == nullptr) {
+        msg.control.println(F("ERROR: No filename provided"));
+        msg.debug.error(TAG_SD, "No filename provided");
+        return false;
     } else {
-        snprintf(filepath, sizeof(filepath), "/config/%s", filename);
+        // Ensure filename is in config directory
+        if (filename[0] == '/') {
+            snprintf(filepath, sizeof(filepath), "/config%s", filename);
+        } else {
+            snprintf(filepath, sizeof(filepath), "/config/%s", filename);
+        }
     }
     filepath[sizeof(filepath) - 1] = '\0';
+
+    msg.debug.info(TAG_SD, "Opening file: %s", filepath);
 
     // Open file for reading
     File configFile = SD.open(filepath, FILE_READ);
     if (!configFile) {
-        Serial.print(F("ERROR: Failed to open file: "));
-        Serial.println(filepath);
+        msg.control.print(F("ERROR: Failed to open file: "));
+        msg.control.println(filepath);
+        msg.debug.error(TAG_SD, "File open FAILED");
+        // Re-enable watchdog before returning
+        watchdogEnable(2000);
+        msg.debug.debug(TAG_SD, "Watchdog re-enabled");
         return false;
     }
 
+    msg.debug.debug(TAG_SD, "File opened successfully");
+    msg.debug.debug(TAG_SD, "Reading file...");
+
     // Read entire file into string
     String jsonString;
+    size_t bytesRead = 0;
     while (configFile.available()) {
         jsonString += (char)configFile.read();
+        bytesRead++;
     }
+
+    msg.debug.debug(TAG_SD, "Read complete: %u bytes total", bytesRead);
+    msg.debug.debug(TAG_SD, "Closing file...");
     configFile.close();
-    digitalWrite(systemConfig.sdCSPin, HIGH);
+    msg.debug.debug(TAG_SD, "File closed");
+
+    msg.debug.debug(TAG_SD, "Parsing JSON...");
 
     // Load configuration
     bool success = loadConfigFromJSON(jsonString.c_str());
 
+    msg.debug.debug(TAG_SD, "JSON parsing complete");
+
+    // Re-enable watchdog after SD operations complete
+    watchdogEnable(2000);
+    msg.debug.debug(TAG_SD, "Watchdog re-enabled");
+
     if (success) {
-        Serial.print(F("Configuration loaded from: "));
-        Serial.println(filepath);
+        msg.control.print(F("Configuration loaded from: "));
+        msg.control.println(filepath);
+        msg.debug.info(TAG_SD, "Load operation completed successfully");
+    } else {
+        msg.debug.error(TAG_SD, "Load operation FAILED");
     }
 
     return success;
+}
+
+/**
+ * Save configuration to file with destination routing
+ * @param destination Destination string ("SD", "USB", etc.)
+ * @param filename Filename (without destination prefix)
+ * @return true if successful
+ */
+bool saveConfigToFile(const char* destination, const char* filename) {
+    // Route based on destination
+    if (strcmp(destination, "SD") == 0) {
+        return saveConfigToSD(filename);
+    }
+
+#ifdef ENABLE_USB_STORAGE
+    else if (strcmp(destination, "USB") == 0) {
+        // Future: USB storage implementation
+        msg.control.println(F("ERROR: USB storage not yet implemented"));
+        return false;
+    }
+#endif
+
+#ifdef ENABLE_HTTP_STORAGE
+    else if (strcmp(destination, "HTTP") == 0 || strcmp(destination, "HTTPS") == 0) {
+        // Future: HTTP/HTTPS upload implementation
+        msg.control.println(F("ERROR: HTTP storage not yet implemented"));
+        return false;
+    }
+#endif
+
+    else {
+        msg.control.print(F("ERROR: Unknown destination '"));
+        msg.control.print(destination);
+        msg.control.println(F("'"));
+        msg.control.println(F("  Supported destinations: SD"));
+#ifdef ENABLE_USB_STORAGE
+        msg.control.println(F("  Conditional: USB (if ENABLE_USB_STORAGE defined)"));
+#endif
+        return false;
+    }
+}
+
+/**
+ * Load configuration from file with destination routing
+ * @param destination Destination string ("SD", "USB", etc.)
+ * @param filename Filename (without destination prefix)
+ * @return true if successful
+ */
+bool loadConfigFromFile(const char* destination, const char* filename) {
+    // Route based on destination
+    if (strcmp(destination, "SD") == 0) {
+        return loadConfigFromSD(filename);
+    }
+
+#ifdef ENABLE_USB_STORAGE
+    else if (strcmp(destination, "USB") == 0) {
+        // Future: USB storage implementation
+        msg.control.println(F("ERROR: USB storage not yet implemented"));
+        return false;
+    }
+#endif
+
+#ifdef ENABLE_HTTP_STORAGE
+    else if (strcmp(destination, "HTTP") == 0 || strcmp(destination, "HTTPS") == 0) {
+        // Future: HTTP download implementation
+        msg.control.println(F("ERROR: HTTP storage not yet implemented"));
+        return false;
+    }
+#endif
+
+    else {
+        msg.control.print(F("ERROR: Unknown destination '"));
+        msg.control.print(destination);
+        msg.control.println(F("'"));
+        msg.control.println(F("  Supported destinations: SD"));
+#ifdef ENABLE_USB_STORAGE
+        msg.control.println(F("  Conditional: USB (if ENABLE_USB_STORAGE defined)"));
+#endif
+        return false;
+    }
 }
 
 #endif // USE_STATIC_CONFIG

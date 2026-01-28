@@ -12,8 +12,16 @@
 #include "lib/watchdog.h"
 
 #include "lib/sensor_types.h"
+#ifdef USE_STATIC_CONFIG
+#include "lib/generated/sensor_library_static.h"
+#else
 #include "lib/sensor_library.h"
+#endif
 #include "lib/system_config.h"
+#include "lib/bus_manager.h"
+#include "lib/serial_manager.h"
+#include "lib/pin_registry.h"
+#include "lib/sd_manager.h"
 #include "inputs/input.h"
 #include "inputs/input_manager.h"
 #ifndef USE_STATIC_CONFIG
@@ -23,6 +31,59 @@
 #endif
 #include "lib/display_manager.h"        // Display runtime state management
 #include "outputs/output_base.h"
+
+// Transport abstraction layer
+#include "lib/message_router.h"
+#include "lib/message_api.h"
+#include "lib/log_tags.h"
+#include "lib/transport_serial.h"
+#ifdef ESP32
+// Include appropriate Bluetooth transport for ESP32 variant
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3)
+    #include "lib/transports/transport_ble_esp32.h"
+#else
+    #include "lib/transports/transport_bluetooth_esp32.h"
+#endif
+#endif
+
+// Global transport instances
+SerialTransport usbSerial(&Serial, "USB", 115200);
+
+// Hardware serial transports - created for all available ports
+// Actual initialization happens in initConfiguredSerialPorts() based on config
+#if NUM_SERIAL_PORTS >= 1
+SerialTransport hwSerial1(&Serial1, "SERIAL1", 115200);
+#endif
+#if NUM_SERIAL_PORTS >= 2
+SerialTransport hwSerial2(&Serial2, "SERIAL2", 115200);
+#endif
+#if NUM_SERIAL_PORTS >= 3
+SerialTransport hwSerial3(&Serial3, "SERIAL3", 115200);
+#endif
+#if NUM_SERIAL_PORTS >= 4
+SerialTransport hwSerial4(&Serial4, "SERIAL4", 115200);
+#endif
+#if NUM_SERIAL_PORTS >= 5
+SerialTransport hwSerial5(&Serial5, "SERIAL5", 115200);
+#endif
+#if NUM_SERIAL_PORTS >= 6
+SerialTransport hwSerial6(&Serial6, "SERIAL6", 115200);
+#endif
+#if NUM_SERIAL_PORTS >= 7
+SerialTransport hwSerial7(&Serial7, "SERIAL7", 115200);
+#endif
+#if NUM_SERIAL_PORTS >= 8
+SerialTransport hwSerial8(&Serial8, "SERIAL8", 115200);
+#endif
+
+#ifdef ESP32
+// ESP32 Bluetooth transport (Classic or BLE depending on chip)
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C3)
+    BLETransportESP32 btESP32("openEMS");
+#else
+    BluetoothTransportESP32 btESP32("openEMS");
+#endif
+#endif
 
 // Declare output module functions
 extern void initOutputModules();
@@ -134,40 +195,86 @@ void setup() {
     Serial.begin(115200);
     while (!Serial && millis() < 3000) {};  // Wait up to 3 seconds for serial
 
-    Serial.println(F("                                        "));
-    Serial.println(F("                       ______  _______  "));
-    Serial.println(F("   ___  ___  ___ ___  / __/  |/  / __/  "));
-    Serial.println(F("  / _ \\/ _ \\/ -_) _ \\/ _// /|_/ /\\ \\    "));
-    Serial.println(F("  \\___/ .__/\\__/_//_/___/_/  /_/___/    "));
-    Serial.println(F("     /_/                                "));
-    Serial.println(F("                                        "));
-    Serial.println(F("openEngine Monitoring System ==========="));
-    Serial.println("Firmware version " FIRMWARE_VERSION);
-    Serial.println(F("                                        "));
-
-    // Configure ADC for this platform
-    setupADC();
-    Serial.println(F("✓ ADC configured"));
-
-    // Initialize SPI BEFORE input manager (needed for thermocouple CS pin setup)
-    SPI.begin();
-    Serial.println(F("✓ SPI bus initialized"));
-    
-    // Initialize I2C for BME280 and LCD
-    Wire.begin();
-    #if defined(ESP32)
-    // ESP32 may need explicit SDA/SCL pins
-    // Wire.begin(SDA_PIN, SCL_PIN);  // Uncomment and set if needed
-    Wire.setClock(100000);  // 100kHz for stability
-    #else
-    Wire.setClock(400000);  // 400kHz for most platforms
-    #endif
-    Serial.println(F("✓ I2C initialized"));
-
     // Initialize system config (loads from EEPROM or uses defaults from config.h)
+    // MUST happen before router.begin() so router can load correct transport mappings
 #ifndef USE_STATIC_CONFIG
     initSystemConfig();
 #endif
+
+    // Initialize pin registry FIRST - before any code registers pins
+    // This was previously called later, which caused the registry to be cleared
+    // after serial ports had already registered their pins
+    initPinRegistry();
+
+    // Register system pins in the pin registry
+    registerSystemPins();
+
+    // Initialize configured serial ports based on SystemConfig.serial
+    // This replaces the old hardcoded Serial1.begin() / Serial2.begin() calls
+    initConfiguredSerialPorts();
+
+    // Initialize transport router - register USB serial (always available)
+    router.registerTransport(TRANSPORT_USB_SERIAL, &usbSerial);
+
+    // Register all available hardware serial transports
+    // They will only be usable if enabled via BUS SERIAL command
+#if NUM_SERIAL_PORTS >= 1
+    router.registerTransport(TRANSPORT_SERIAL1, &hwSerial1);
+#endif
+#if NUM_SERIAL_PORTS >= 2
+    router.registerTransport(TRANSPORT_SERIAL2, &hwSerial2);
+#endif
+#if NUM_SERIAL_PORTS >= 3
+    router.registerTransport(TRANSPORT_SERIAL3, &hwSerial3);
+#endif
+#if NUM_SERIAL_PORTS >= 4
+    router.registerTransport(TRANSPORT_SERIAL4, &hwSerial4);
+#endif
+#if NUM_SERIAL_PORTS >= 5
+    router.registerTransport(TRANSPORT_SERIAL5, &hwSerial5);
+#endif
+#if NUM_SERIAL_PORTS >= 6
+    router.registerTransport(TRANSPORT_SERIAL6, &hwSerial6);
+#endif
+#if NUM_SERIAL_PORTS >= 7
+    router.registerTransport(TRANSPORT_SERIAL7, &hwSerial7);
+#endif
+#if NUM_SERIAL_PORTS >= 8
+    router.registerTransport(TRANSPORT_SERIAL8, &hwSerial8);
+#endif
+
+#ifdef ESP32
+    if (btESP32.begin()) {
+        router.registerTransport(TRANSPORT_ESP32_BT, &btESP32);
+        msg.debug.info(TAG_BT, "ESP32 Bluetooth initialized");
+    } else {
+        msg.debug.warn(TAG_BT, "ESP32 Bluetooth failed to initialize");
+    }
+#endif
+    router.begin();  // Load config from EEPROM
+
+    msg.control.println(F("                                        "));
+    msg.control.println(F("                       ______  _______  "));
+    msg.control.println(F("   ___  ___  ___ ___  / __/  |/  / __/  "));
+    msg.control.println(F("  / _ \\/ _ \\/ -_) _ \\/ _// /|_/ /\\ \\    "));
+    msg.control.println(F("  \\___/ .__/\\__/_//_/___/_/  /_/___/    "));
+    msg.control.println(F("     /_/                                "));
+    msg.control.println(F("                                        "));
+    msg.control.println(F("openEngine Monitoring System ==========="));
+    msg.control.print(F("Firmware version "));
+    msg.control.println(firmwareVersionString());
+    msg.control.println(F("                                        "));
+
+    // Configure ADC for this platform
+    setupADC();
+    msg.debug.info(TAG_ADC, "ADC configured");
+
+    // Initialize configured buses (I2C, SPI, CAN) based on SystemConfig
+    // This replaces the old hardcoded Wire.begin() and SPI.begin() calls
+    initConfiguredBuses();
+
+    // Initialize SD card (shared by SD logging and JSON config)
+    initSD();
 
     // Initialize input manager (loads from EEPROM or config.h)
 #ifndef USE_STATIC_CONFIG
@@ -194,8 +301,7 @@ void setup() {
     initOutputModules();
 
     // Wait for sensors to stabilize
-    Serial.println(F(""));
-    Serial.println(F("Waiting for sensors to stabilize..."));
+    msg.debug.info(TAG_SENSOR, "Waiting for sensors to stabilize...");
     delay(1000);  // Increased from 500ms - MAX6675 needs ~220ms for first conversion
 
     // Initialize per-sensor read timers (all start at 0)
@@ -203,28 +309,14 @@ void setup() {
         lastInputRead[i] = 0;
     }
 
-    Serial.println(F(""));
-    Serial.println(F("========================================"));
-    Serial.println(F("  Initialization complete!"));
+    msg.debug.info(TAG_SYSTEM, "Initialization complete!");
 #ifdef USE_STATIC_CONFIG
-    Serial.println(F("  Mode: Compile-Time Config"));
-    Serial.print(F("  Active inputs: "));
-    Serial.println(numActiveInputs);
-    Serial.print(F("  System voltage: "));
-    Serial.print(SYSTEM_VOLTAGE);
-    Serial.println(F("V"));
-    Serial.print(F("  ADC reference: "));
-    Serial.print(AREF_VOLTAGE);
-    Serial.println(F("V"));
-    Serial.print(F("  ADC resolution: "));
-    Serial.print(ADC_RESOLUTION);
-    Serial.println(F(" bits"));
-    Serial.print(F("  ADC max value: "));
-    Serial.println(ADC_MAX_VALUE);
-    Serial.println(F("========================================"));
-    Serial.println(F(""));
-#else
-    Serial.println(F(""));
+    msg.debug.info(TAG_CONFIG, "Mode: Compile-Time Config");
+    msg.debug.info(TAG_CONFIG, "Active inputs: %d", numActiveInputs);
+    msg.debug.info(TAG_CONFIG, "System voltage: %.1fV", SYSTEM_VOLTAGE);
+    msg.debug.info(TAG_CONFIG, "ADC reference: %.2fV", AREF_VOLTAGE);
+    msg.debug.info(TAG_CONFIG, "ADC resolution: %d bits", ADC_RESOLUTION);
+    msg.debug.info(TAG_CONFIG, "ADC max value: %d", ADC_MAX_VALUE);
 #endif
 
     // ===== TEST MODE ACTIVATION =====
@@ -237,11 +329,7 @@ void setup() {
     delay(10);  // Allow pin to stabilize
 
     if (digitalRead(TEST_MODE_TRIGGER_PIN) == LOW) {
-        Serial.println(F(""));
-        Serial.println(F("========================================"));
-        Serial.println(F("  TEST MODE TRIGGER DETECTED!"));
-        Serial.println(F("========================================"));
-        Serial.println(F(""));
+        msg.debug.info(TAG_SYSTEM, "TEST MODE TRIGGER DETECTED!");
 
         // List available scenarios
         listTestScenarios();
@@ -250,13 +338,11 @@ void setup() {
         #if DEFAULT_TEST_SCENARIO != 0xFF
         startTestScenario(DEFAULT_TEST_SCENARIO);
         #else
-        Serial.println(F("Test mode initialized but no default scenario set."));
-        Serial.println(F("Use serial commands to start a scenario."));
+        msg.debug.info(TAG_SYSTEM, "Test mode initialized but no default scenario set.");
+        msg.debug.info(TAG_SYSTEM, "Use serial commands to start a scenario.");
         #endif
     } else {
-        Serial.print(F("Test mode available (pin "));
-        Serial.print(TEST_MODE_TRIGGER_PIN);
-        Serial.println(F(" is HIGH, normal operation)"));
+        msg.debug.info(TAG_SYSTEM, "Test mode available (pin %d is HIGH, normal operation)", TEST_MODE_TRIGGER_PIN);
     }
 #endif
 
@@ -272,14 +358,14 @@ void setup() {
     // Only enable watchdog in RUN mode (CONFIG mode doesn't need it)
     if (bootMode == MODE_RUN) {
         watchdogEnable(2000);
-        Serial.println(F("Watchdog enabled (2s timeout)"));
+        msg.debug.info(TAG_SYSTEM, "Watchdog enabled (2s timeout)");
     } else {
-        Serial.println(F("Watchdog disabled (CONFIG mode)"));
+        msg.debug.info(TAG_SYSTEM, "Watchdog disabled (CONFIG mode)");
     }
 #else
     // Always enable watchdog in static config mode
     watchdogEnable(2000);
-    Serial.println(F("Watchdog enabled (2s timeout)"));
+    msg.debug.info(TAG_SYSTEM, "Watchdog enabled (2s timeout)");
 #endif
 }
 
@@ -290,9 +376,12 @@ void loop() {
     // Reset watchdog at start of every loop iteration
     watchdogReset();
 
+    // Update transport router (poll transports, handle housekeeping, process commands)
+    router.update();  // Now handles command input from ALL transports
+
 #ifndef USE_STATIC_CONFIG
-    // Process serial configuration commands (non-blocking, always runs)
-    processSerialCommands();
+    // NOTE: processSerialCommands() is now deprecated - router.update() handles it
+    // Kept for reference but does nothing (see serial_config.cpp)
 
     // Process button events (short press = silence alarm, long press = toggle display)
     ButtonPress buttonEvent = updateButtonHandler();

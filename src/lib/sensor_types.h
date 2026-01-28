@@ -17,19 +17,22 @@ enum MeasurementType {
     MEASURE_RPM,          // RPM
     MEASURE_HUMIDITY,     // Percent
     MEASURE_ELEVATION,    // Meters -> feet/meters
-    MEASURE_DIGITAL       // Digital on/off (float switch)
+    MEASURE_DIGITAL,      // Digital on/off (float switch)
+    MEASURE_SPEED         // Vehicle speed in km/h
 };
 
 // Calibration type enumeration (for type safety)
 enum CalibrationType {
     CAL_NONE,
     CAL_THERMISTOR_STEINHART,
-    CAL_THERMISTOR_LOOKUP,
+    CAL_THERMISTOR_TABLE,    // Was CAL_THERMISTOR_LOOKUP
     CAL_THERMISTOR_BETA,
     CAL_PRESSURE_POLYNOMIAL,
+    CAL_PRESSURE_TABLE,      // Pressure sensor using lookup table
     CAL_LINEAR,              // Linear sensor (temperature, pressure, etc.)
     CAL_VOLTAGE_DIVIDER,
     CAL_RPM,
+    CAL_SPEED                // Speed sensor calibration
 };
 
 // ===== CALIBRATION STRUCTURES =====
@@ -79,6 +82,15 @@ typedef struct {
 } PressurePolynomialCalibration;
 typedef PressurePolynomialCalibration PolynomialCalibration;
 
+// Pressure sensor calibration using lookup table interpolation
+// For VDO resistive pressure senders with non-linear R/P curves
+typedef struct {
+    float bias_resistor;           // Pull-down resistor in ohms
+    const float* resistance_table; // Pointer to resistance array (ohms) - ASCENDING order
+    const float* pressure_table;   // Pointer to pressure array (bar)
+    byte table_size;               // Number of entries in tables
+} PressureTableCalibration;
+
 // Voltage divider calibration
 typedef struct {
     float r1;              // High-side resistor (ohms)
@@ -96,5 +108,15 @@ typedef struct {
     uint16_t min_rpm;        // Minimum valid RPM (default 100)
     uint16_t max_rpm;        // Maximum valid RPM (default 10000)
 } RPMCalibration;
+
+// ===== SPEED CALIBRATION STRUCTURE =====
+typedef struct {
+    uint8_t pulses_per_rev;      // Number of pulses per wheel/shaft revolution (gear teeth)
+    uint16_t tire_circumference_mm; // Tire rolling circumference in millimeters
+    float final_drive_ratio;     // Differential/transmission ratio (e.g., 3.73 for 3.73:1)
+    float calibration_mult;      // Fine-tuning multiplier (default 1.0)
+    uint16_t timeout_ms;         // Timeout for zero speed (ms, default 2000)
+    uint16_t max_speed_kph;      // Maximum valid speed in km/h (safety check, default 300)
+} SpeedCalibration;
 
 #endif

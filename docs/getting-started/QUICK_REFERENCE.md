@@ -13,6 +13,33 @@
 
 ---
 
+## Build Platforms
+
+### Platform Selection
+
+```bash
+pio run -e teensy41      # Teensy 4.1 with built-in SD (recommended)
+pio run -e teensy40      # Teensy 4.0
+pio run -e mega2560      # Arduino Mega 2560
+pio run -e uno_static    # Arduino Uno (static config)
+```
+
+### Platform Comparison
+
+| Platform | Flash | RAM | Features | Notes |
+|----------|-------|-----|----------|-------|
+| **Teensy 4.1** | 8MB | 512KB | All | **Recommended** - Built-in SD |
+| Teensy 4.0 | 2MB | 512KB | All | External SD module |
+| Teensy 3.6 | 1MB | 256KB | All | Older platform |
+| Mega 2560 | 256KB | 8KB | All | Good for prototyping |
+| Uno | 32KB | 2KB | Minimal | Static config only |
+
+**Recommended**: Teensy 4.1 provides best value with built-in SD card, ample resources, and native CAN support.
+
+See [Build Configuration Guide](../guides/configuration/BUILD_CONFIGURATION_GUIDE.md) for details.
+
+---
+
 ## Quick Start
 
 ### 1. Connect and Build
@@ -20,8 +47,8 @@
 ```bash
 git clone https://github.com/preobd/openEMS.git
 cd openEMS
-pio run -t upload
-pio device monitor    # 115200 baud
+pio run -e teensy41 -t upload    # Build and upload for Teensy 4.1
+pio device monitor               # 115200 baud
 ```
 
 ### 2. Configure Your Sensors
@@ -30,18 +57,18 @@ pio device monitor    # 115200 baud
 CONFIG                                    # Enter configuration mode
 SET 7 EGT MAX31855                       # Pin 7: EGT with thermocouple
 SET A0 OIL_TEMP VDO_150C_STEINHART        # Pin A0: VDO 150C using Steinhart Calibration
-SET A2 COOLANT_TEMP VDO_120C_LOOKUP      # Pin A2: VDO coolant sensor using Lookup table
+SET A2 COOLANT_TEMP VDO_120C_TABLE      # Pin A2: VDO coolant sensor using Lookup table
 SET A3 OIL_PRESSURE GENERIC_150PSI       # Pin A3: Generic 0.5-4.5V pressure
 SET A6 PRIMARY_BATTERY VOLTAGE_DIVIDER   # Pin A6: Battery voltage
 SAVE                                      # Save configuration
 RUN                                       # Start monitoring
 ```
 
-Use `LIST SENSORS` to see all available sensor types.
+Use `LIST SENSORS` to see sensor categories, then `LIST SENSORS <category>` for specific sensors.
 
 ### 3. Operate
 
-**MODE_BUTTON (Pin 5):**
+**MODE_BUTTON:**
 - Hold during boot → Enter CONFIG mode
 - Press in RUN mode → Silence alarms for 30 seconds
 
@@ -67,7 +94,7 @@ MAX31855 CS  → Your configured pin
 ### VDO Temperature Sensor
 
 ```
-SET A2 COOLANT_TEMP VDO_120C_LOOKUP   # Coolant (most accurate)
+SET A2 COOLANT_TEMP VDO_120C_TABLE   # Coolant (most accurate)
 SET A4 OIL_TEMP VDO_150C_STEINHART    # Oil temp (faster processing)
 SET A5 TCASE_TEMP VDO_150C_STEINHART  # Transfer case
 ```
@@ -84,9 +111,9 @@ Add bias resistor: Pin → 1kΩ → 3.3V/5V
 For non-VDO NTC thermistors (common 10K sensors):
 
 ```
-SET A0 OIL_TEMP NTC_10K_BETA_3950      # Most common generic NTC
-SET A1 COOLANT_TEMP NTC_10K_STEINHART  # Alternative method
-SET A2 COOLANT_TEMP THERMISTOR_STEINHART  # Then set coefficients
+SET A0 OIL_TEMP NTC_10K_BETA_3950       # Most common generic NTC
+SET A1 COOLANT_TEMP NTC_10K_STEINHART   # Alternative method
+SET A2 COOLANT_TEMP NTC_STEINHART       # Then set coefficients
 SET A2 STEINHART 10000 1.129e-3 2.341e-4 8.775e-8
 ```
 
@@ -100,8 +127,8 @@ Bias resistor  → Between analog pin and 3.3V/5V
 ### VDO Pressure Sensor
 
 ```
-SET A3 OIL_PRESSURE VDO_5BAR          # Oil pressure
-SET A7 BOOST_PRESSURE VDO_2BAR        # Boost pressure
+SET A3 OIL_PRESSURE VDO_5BAR_CURVE          # Oil pressure
+SET A7 BOOST_PRESSURE VDO_2BAR_CURVE        # Boost pressure
 SET A8 FUEL_PRESSURE VDO_10BAR        # Fuel pressure
 ```
 
@@ -152,6 +179,17 @@ SET 3 ENGINE_RPM W_PHASE_RPM
 
 **⚠️ CRITICAL:** Requires voltage protection circuit for 3.3V boards! See [W_PHASE_RPM_GUIDE.md](../guides/sensor-types/W_PHASE_RPM_GUIDE.md).
 
+### Vehicle Speed (Hall Effect Sensor)
+
+```
+SET 2 VEHICLE_SPEED HALL_SPEED
+SET 2 SPEED 100 2008 3.73 2000 300
+```
+
+**Parameters:** pulses_per_rev (100), tire_circumference_mm (2008), final_drive_ratio (3.73), timeout_ms (2000), max_speed_kph (300)
+
+**⚠️ CRITICAL:** 12V sensors require voltage protection for 3.3V boards! See [HALL_SPEED_GUIDE.md](../guides/sensor-types/HALL_SPEED_GUIDE.md).
+
 ### Environmental (BME280)
 
 ```
@@ -169,13 +207,58 @@ SET 4 COOLANT_LEVEL FLOAT_SWITCH
 
 ---
 
+## Output Modules
+
+### OBD-II Scanner Support (ELM327 / Torque)
+
+```
+OUTPUT CAN ENABLE                   # Enable CAN output
+# Plug in ELM327 Bluetooth adapter to OBD-II port
+# Open Torque app → Settings → OBD/ECU → Connection → Bluetooth
+# Select your ELM327 adapter
+# View real-time sensor data
+```
+
+**Supported apps**: Torque, OBD Fusion, Car Scanner, DashCommand
+
+See [OBD-II Scanner Guide](../guides/outputs/OBD2_SCANNER_GUIDE.md) for details.
+
+### RealDash Dashboard
+
+```
+OUTPUT RealDash ENABLE              # Enable RealDash CAN output
+# Works simultaneously with OBD-II scanners (hybrid mode)
+```
+
+See [RealDash Setup Guide](../guides/outputs/REALDASH_SETUP_GUIDE.md) for details.
+
+---
+
 ## Command Reference
+
+### Getting Help
+
+The help system is hierarchical and organized by category:
+
+| Command | Description |
+|---------|-------------|
+| `HELP` | Show category overview |
+| `HELP <category>` | Show detailed help (LIST, SET, CALIBRATION, CONTROL, OUTPUT, RELAY, DISPLAY, TRANSPORT, SYSTEM, CONFIG) |
+| `HELP QUICK` | Show compact command reference |
+| `?` | Alias for HELP |
+
+**Examples:**
+```
+HELP                    # Show all categories
+HELP SET                # Show all SET commands
+HELP CALIBRATION        # Show calibration commands
+```
 
 ### Configuration Commands (CONFIG mode only)
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `SET <pin> <app> <sensor>` | Configure input | `SET A2 COOLANT_TEMP VDO_120C_LOOKUP` |
+| `SET <pin> <app> <sensor>` | Configure input | `SET A2 COOLANT_TEMP VDO_120C_TABLE` |
 | `SET <pin> ALARM <min> <max>` | Set alarm thresholds | `SET A2 ALARM 60 120` |
 | `SET <pin> UNITS <unit>` | Set display units | `SET A2 UNITS FAHRENHEIT` |
 | `SET <pin> NAME <n>` | Set short name | `SET A2 NAME CLT` |
@@ -190,10 +273,12 @@ SET 4 COOLANT_LEVEL FLOAT_SWITCH
 |---------|-------------|
 | `LIST INPUTS` | Show all configured inputs |
 | `LIST APPLICATIONS` | Show available applications |
-| `LIST SENSORS` | Show available sensor types |
+| `LIST SENSORS` | Show sensor categories |
+| `LIST SENSORS <category>` | Show sensors in category |
 | `INFO <pin>` | Show input details |
 | `DUMP` | Show complete configuration |
 | `VERSION` | Show firmware version |
+| `HELP <category>` | Show help for category |
 
 ### System Commands
 
@@ -201,14 +286,13 @@ SET 4 COOLANT_LEVEL FLOAT_SWITCH
 |---------|-------------|
 | `CONFIG` | Enter configuration mode |
 | `RUN` | Enter run mode |
-| `RESET` | Clear all configuration |
 | `LOAD` | Reload from EEPROM |
 
 ### Output Commands
 
 | Command | Description |
 |---------|-------------|
-| `OUTPUT LIST` | Show all output modules |
+| `LIST OUTPUTS` | Show all output modules |
 | `OUTPUT <n> ENABLE` | Enable output |
 | `OUTPUT <n> DISABLE` | Disable output |
 | `OUTPUT <n> INTERVAL <ms>` | Set update interval |
@@ -220,8 +304,66 @@ SET 4 COOLANT_LEVEL FLOAT_SWITCH
 | `DISPLAY STATUS` | Show display config |
 | `DISPLAY ENABLE` | Enable display |
 | `DISPLAY DISABLE` | Disable display |
-| `DISPLAY UNITS TEMP <C\|F>` | Set temperature units |
-| `DISPLAY UNITS PRESSURE <BAR\|PSI\|KPA>` | Set pressure units |
+| `DISPLAY TYPE <LCD\|OLED\|NONE>` | Set display type |
+| `DISPLAY INTERVAL <ms>` | Set display refresh rate |
+
+### System Commands
+
+| Command | Description |
+|---------|-------------|
+| `SYSTEM STATUS` | Show global configuration |
+| `SYSTEM DUMP` | Complete system dump |
+| `SYSTEM DUMP JSON` | Export configuration as JSON |
+| `SYSTEM UNITS TEMP <C\|F>` | Set default temperature units |
+| `SYSTEM UNITS PRESSURE <BAR\|PSI\|KPA\|INHG>` | Set default pressure units |
+| `SYSTEM UNITS ELEVATION <M\|FT>` | Set default elevation units |
+| `SYSTEM UNITS SPEED <KPH\|MPH>` | Set default speed units |
+| `SYSTEM SEA_LEVEL <hPa>` | Set sea level pressure |
+| `SYSTEM INTERVAL SENSOR <ms>` | Set sensor read interval |
+| `SYSTEM INTERVAL ALARM <ms>` | Set alarm check interval |
+| `SYSTEM REBOOT` | Restart the device |
+| `SYSTEM RESET CONFIRM` | Factory reset (erase config + reboot) |
+
+### Relay Commands (requires ENABLE_RELAY_OUTPUT)
+
+| Command | Description |
+|---------|-------------|
+| `RELAY LIST` | Show all relay status |
+| `RELAY <0-1> PIN <pin>` | Set relay output pin |
+| `RELAY <0-1> INPUT <pin>` | Link to sensor input |
+| `RELAY <0-1> THRESHOLD <on> <off>` | Set ON/OFF thresholds |
+| `RELAY <0-1> MODE <mode>` | AUTO_HIGH, AUTO_LOW, ON, OFF |
+
+**Example - Cooling fan:**
+```
+RELAY 0 PIN 23              # Relay on pin 23
+RELAY 0 INPUT A2            # Monitor coolant temp
+RELAY 0 THRESHOLD 90 85     # ON at 90°C, OFF at 85°C
+RELAY 0 MODE AUTO_HIGH      # Activate on high temp
+```
+
+See [Relay Control Guide](../guides/outputs/RELAY_CONTROL.md) for details.
+
+### Bus Commands
+
+| Command | Description |
+|---------|-------------|
+| `BUS` | Show all bus configurations |
+| `BUS I2C [0\|1\|2]` | Show or select I2C bus (Wire/Wire1/Wire2) |
+| `BUS I2C CLOCK <kHz>` | Set I2C clock (100, 400, 1000) |
+| `BUS SPI [0\|1\|2]` | Show or select SPI bus (SPI/SPI1/SPI2) |
+| `BUS SPI CLOCK <Hz>` | Set SPI clock speed |
+| `BUS CAN [0\|1\|2]` | Show or select CAN bus (CAN1/CAN2/CAN3) |
+| `BUS CAN BAUDRATE <bps>` | Set CAN baudrate |
+
+**Example - Switch to Wire1:**
+```
+BUS I2C 1                   # Select Wire1 (pins 17/16 on Teensy 4.x)
+SAVE
+SYSTEM REBOOT               # Reboot to apply
+```
+
+See [Serial Commands Reference](../reference/SERIAL_COMMANDS.md#bus-configuration) for details.
 
 ---
 
@@ -236,6 +378,8 @@ SET 4 COOLANT_LEVEL FLOAT_SWITCH
 | `KPA` | Pressure in kilopascals |
 | `VOLTS` or `V` | Voltage |
 | `RPM` | Revolutions per minute |
+| `KPH` | Speed in kilometers per hour |
+| `MPH` | Speed in miles per hour |
 | `PERCENT` or `%` | Percentage |
 | `METERS` or `M` | Altitude in meters |
 | `FEET` or `FT` | Altitude in feet |
@@ -251,9 +395,9 @@ SET 4 COOLANT_LEVEL FLOAT_SWITCH
 | `COOLANT_TEMP` | Engine Coolant | VDO_120C_*, NTC_10K_* |
 | `OIL_TEMP` | Engine Oil | VDO_150C_*, NTC_10K_* |
 | `TCASE_TEMP` | Transfer Case | VDO_150C_*, NTC_10K_* |
-| `OIL_PRESSURE` | Engine Oil Pressure | VDO_5BAR, GENERIC_150PSI |
-| `BOOST_PRESSURE` | Boost/Manifold Pressure | GENERIC_BOOST, VDO_2BAR |
-| `FUEL_PRESSURE` | Fuel Pressure | VDO_5BAR, GENERIC_150PSI |
+| `OIL_PRESSURE` | Engine Oil Pressure | VDO_5BAR_CURVE, GENERIC_150PSI |
+| `BOOST_PRESSURE` | Boost/Manifold Pressure | GENERIC_BOOST, VDO_2BAR_CURVE |
+| `FUEL_PRESSURE` | Fuel Pressure | VDO_5BAR_CURVE, GENERIC_150PSI |
 | `PRIMARY_BATTERY` | Main Battery | VOLTAGE_DIVIDER |
 | `AUXILIARY_BATTERY` | Secondary Battery | VOLTAGE_DIVIDER |
 | `COOLANT_LEVEL` | Coolant Level Switch | FLOAT_SWITCH |
@@ -262,6 +406,7 @@ SET 4 COOLANT_LEVEL FLOAT_SWITCH
 | `HUMIDITY` | Relative Humidity | BME280_HUMIDITY |
 | `ELEVATION` | Estimated Altitude | BME280_ELEVATION |
 | `ENGINE_RPM` | Engine RPM | W_PHASE_RPM |
+| `VEHICLE_SPEED` | Vehicle Speed | HALL_SPEED |
 
 ---
 
@@ -272,40 +417,44 @@ SET 4 COOLANT_LEVEL FLOAT_SWITCH
 - `MAX31855` - K-Type thermocouple (high range, -200 to 1350°C)
 
 ### VDO Thermistors
-- `VDO_120C_LOOKUP` - VDO 120°C (lookup table, most accurate)
+- `VDO_120C_TABLE` - VDO 120°C (lookup table, most accurate)
 - `VDO_120C_STEINHART` - VDO 120°C (Steinhart-Hart, faster)
-- `VDO_150C_LOOKUP` - VDO 150°C (lookup table)
+- `VDO_150C_TABLE` - VDO 150°C (table)
 - `VDO_150C_STEINHART` - VDO 150°C (Steinhart-Hart)
 
 ### Generic NTC Thermistors
 - `NTC_10K_BETA_3950` - 10K NTC, β=3950 (most common)
 - `NTC_10K_BETA_3435` - 10K NTC, β=3435
 - `NTC_10K_STEINHART` - 10K NTC, Steinhart-Hart
-- `THERMISTOR_STEINHART` - Generic, set coefficients with `SET <pin> STEINHART`
-- `THERMISTOR_BETA` - Generic, set coefficients with `SET <pin> BETA`
+- `NTC_STEINHART` - Generic, set coefficients with `SET <pin> STEINHART`
+- `NTC_BETA` - Generic, set coefficients with `SET <pin> BETA`
 
 ### Linear Temperature Sensors
 - `LINEAR_TEMP_40_150` - Linear 0.5-4.5V, -40 to 150°C
 
 ### VDO Pressure Sensors (Resistive)
-- `VDO_2BAR` - VDO 0-2 bar
-- `VDO_5BAR` - VDO 0-5 bar
+- `VDO_2BAR_CURVE` - VDO 0-2 bar
+- `VDO_5BAR_CURVE` - VDO 0-5 bar
 - `VDO_10BAR` - VDO 0-10 bar
 
 ### Linear Pressure Sensors (0.5-4.5V)
 - `GENERIC_BOOST` - Generic 0-5 bar boost
 - `GENERIC_150PSI` - Generic 0-150 PSI
 - `MPX4250AP` - Freescale/NXP MAP sensor (20-250 kPa)
+- `MPX5700AP` - Freescale/NXP MAP sensor (15-700 kPa)
 - `GENERIC_LINEAR` - Custom, set range with `SET <pin> PRESSURE_LINEAR`
 
 ### Other
 - `VOLTAGE_DIVIDER` - 12V battery monitoring
 - `W_PHASE_RPM` - Alternator RPM
+- `HALL_SPEED` - Hall effect speed sensor (VDO, OEM, generic 3-wire)
 - `FLOAT_SWITCH` - Digital level switch
 - `BME280_TEMP`, `BME280_PRESSURE`, `BME280_HUMIDITY`, `BME280_ELEVATION`
 
 ### Custom Calibration Commands
 ```
+SET <pin> RPM <poles> <ratio> [<mult>] <timeout> <min> <max>     # Custom RPM
+SET <pin> SPEED <ppr> <tire_circ> <ratio> [<mult>] <timeout> <max>  # Custom speed
 SET <pin> STEINHART <bias> <a> <b> <c>           # Custom Steinhart-Hart
 SET <pin> BETA <bias> <beta> <r0> <t0>           # Custom Beta equation
 SET <pin> PRESSURE_LINEAR <vmin> <vmax> <pmin> <pmax>  # Custom linear range
@@ -322,7 +471,7 @@ SET <pin> BIAS <resistor>                         # Override bias resistor
 | Arduino Mega | 10-bit | 5V | 16 | Good all-rounder |
 | Arduino Due | 12-bit | 3.3V | 16 | High resolution ADC |
 | ESP32 | 12-bit | 3.3V | 16 | WiFi capable |
-| Arduino Uno | 10-bit | 5V | 6 | Limited RAM, use [static builds](../advanced/STATIC_BUILDS_GUIDE.md) |
+| Arduino Uno | 10-bit | 5V | 8 | Limited RAM, use [static builds](../advanced/STATIC_BUILDS_GUIDE.md) |
 
 ---
 
@@ -387,6 +536,3 @@ SET <pin> BIAS <resistor>                         # Override bias resistor
 - Your configuration (`DUMP` command)
 - What you expected vs. what happened
 
----
-
-**For the classic car community.**

@@ -21,8 +21,8 @@
  *   SENSOR (hardware device)
  *       │
  *       ├── MAX6675 (K-type thermocouple amplifier)
- *       ├── VDO_120C_LOOKUP (VDO thermistor, lookup table)
- *       ├── VDO_5BAR (VDO pressure sender)
+ *       ├── VDO_120C_TABLE (VDO thermistor, lookup table)
+ *       ├── VDO_5BAR_CURVE (VDO pressure sender, curve fit)
  *       └── ... (see Sensor Library)
  *
  * When you assign an Application to a pin, it loads defaults from
@@ -120,7 +120,18 @@ union CalibrationOverride {
         uint16_t max_rpm;
         byte padding[1];
     } rpm;
-    
+
+    // Speed sensor (16 bytes)
+    struct {
+        uint8_t pulses_per_rev;
+        uint16_t tire_circumference_mm;
+        float final_drive_ratio;
+        float calibration_mult;
+        uint16_t timeout_ms;
+        uint16_t max_speed_kph;
+        byte padding[3];
+    } speed;
+
     // Raw bytes for memset/EEPROM operations
     byte raw[16];
 };
@@ -133,6 +144,13 @@ enum AlarmState : uint8_t {
     ALARM_WARMUP,        // Sensor warming up, alarm blocked
     ALARM_READY,         // Normal operation, alarm checking active
     ALARM_ACTIVE         // Currently in alarm condition
+};
+
+// Alarm severity levels (hierarchical)
+enum AlarmSeverity : uint8_t {
+    SEVERITY_NORMAL = 0,   // No alarm or warning
+    SEVERITY_WARNING = 1,  // Warning threshold exceeded
+    SEVERITY_ALARM = 2     // Alarm threshold exceeded
 };
 
 // Per-input alarm runtime context (12 bytes)
@@ -149,7 +167,8 @@ struct AlarmContext {
 // Size: ~100 bytes per input
 struct Input {
     // === Hardware (1 byte) ===
-    uint8_t pin;                    // Physical pin (A0-A15, or digital)
+    uint8_t pin;                    // Physical pin (A0-A15, or digital, or 0xF0-0xFE for I2C virtual)
+    // Note: Bus selection is global via SystemConfig.buses (not per-input)
 
     // === User Configuration ===
     char abbrName[8];               // "CHT", "OIL" (for LCD display)
@@ -174,6 +193,7 @@ struct Input {
 
     // === Alarm State Management ===
     AlarmContext alarmContext;      // Alarm state machine context (12 bytes)
+    AlarmSeverity currentSeverity;  // Current severity level (1 byte)
 
     // === Flags (packed into 1 byte) ===
     struct {

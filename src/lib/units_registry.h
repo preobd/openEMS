@@ -81,6 +81,12 @@ static const char PSTR_FEET[] PROGMEM = "FEET";
 static const char PSTR_FT[] PROGMEM = "FT";
 static const char PSTR_FT_SYMBOL[] PROGMEM = "ft";
 
+static const char PSTR_KPH[] PROGMEM = "KPH";
+static const char PSTR_KPH_SYMBOL[] PROGMEM = "km/h";
+
+static const char PSTR_MPH[] PROGMEM = "MPH";
+static const char PSTR_MPH_SYMBOL[] PROGMEM = "mph";
+
 /**
  * UNITS_REGISTRY - Complete unit definitions
  *
@@ -230,6 +236,30 @@ static const PROGMEM UnitsInfo UNITS_REGISTRY[] = {
         .conversionOffset = 0.0,
         .nameHash = 0xA0C9,  // djb2_hash("FEET")
         .aliasHash = 0x739F  // djb2_hash("FT")
+    },
+
+    // Index 11: KPH (base unit for speed)
+    {
+        .name = PSTR_KPH,
+        .alias = PSTR_KPH,
+        .symbol = PSTR_KPH_SYMBOL,
+        .measurementType = MEASURE_SPEED,
+        .conversionFactor = 1.0,
+        .conversionOffset = 0.0,
+        .nameHash = 0xFC88,  // djb2_hash("KPH")
+        .aliasHash = 0xFC88  // same as name
+    },
+
+    // Index 12: MPH
+    {
+        .name = PSTR_MPH,
+        .alias = PSTR_MPH,
+        .symbol = PSTR_MPH_SYMBOL,
+        .measurementType = MEASURE_SPEED,
+        .conversionFactor = 0.621371,  // km/h to mph conversion
+        .conversionOffset = 0.0,
+        .nameHash = 0x050A,  // djb2_hash("MPH")
+        .aliasHash = 0x050A  // same as name
     }
 };
 
@@ -358,5 +388,29 @@ inline void loadUnitsInfo(const UnitsInfo* flashInfo, UnitsInfo* ramCopy) {
 #define READ_UNITS_FACTOR(info) pgm_read_float(&(info)->conversionFactor)
 #define READ_UNITS_OFFSET(info) pgm_read_float(&(info)->conversionOffset)
 #define READ_UNITS_MEASUREMENT_TYPE(info) ((MeasurementType)pgm_read_byte(&(info)->measurementType))
+
+/**
+ * Get unit symbol string by index (O(1) direct access)
+ *
+ * Returns the display symbol string for a unit (e.g., "C", "psi", "km/h").
+ * This is a convenience function that wraps getUnitsByIndex() and extracts
+ * only the symbol field.
+ *
+ * @param unitsIndex  Array index (0-12)
+ * @return            Pointer to symbol string in PROGMEM, or empty string if invalid
+ *
+ * Example:
+ *   const char* symbol = getUnitStringByIndex(0);  // Returns "C" (PROGMEM)
+ *   msg.control.print((__FlashStringHelper*)symbol);
+ */
+// Empty string in PROGMEM for invalid unit index
+static const char PSTR_EMPTY_UNIT[] PROGMEM = "";
+
+inline const char* getUnitStringByIndex(uint8_t unitsIndex) {
+    if (unitsIndex >= NUM_UNITS) return PSTR_EMPTY_UNIT;
+
+    const UnitsInfo* info = &UNITS_REGISTRY[unitsIndex];
+    return (const char*)pgm_read_ptr(&info->symbol);
+}
 
 #endif // UNITS_REGISTRY_H

@@ -33,8 +33,8 @@ python3 tools/configure.py
 
 # Follow the interactive prompts to configure sensors
 
-# Build and upload
-pio run -e uno -t upload
+# Build and upload (use uno_static environment)
+pio run -e uno_static -t upload
 ```
 
 ---
@@ -74,9 +74,9 @@ The tool will:
 === openEMS Static Configuration Tool v1.0.0 ===
 
 Loading registries...
-  ✓ 17 sensors from sensor_library.h
-  ✓ 16 applications from application_presets.h
-  ✓ 12 units from units_registry.h
+  ✓ 28 sensors from sensor_library.h (+ sensor_library/sensors/)
+  ✓ 18 applications from application_presets.h
+  ✓ 13 units from units_registry.h
 
 Detected platform: megaatmega2560 (from platformio.ini)
 Board limits: 54 digital pins, 16 analog pins
@@ -177,7 +177,7 @@ The tool saves configurations as JSON files in `tools/saved-configs/`. This allo
       "pin": "A2",
       "application": "COOLANT_TEMP",
       "applicationIndex": 2,
-      "sensor": "VDO_120C_LOOKUP",
+      "sensor": "VDO_120C_TABLE",
       "sensorIndex": 3
     }
   ]
@@ -282,12 +282,12 @@ The tool updates the static configuration block:
 // ----- Input 1: COOLANT_TEMP -----
 #define INPUT_1_PIN           A2
 #define INPUT_1_APPLICATION   2            // COOLANT_TEMP
-#define INPUT_1_SENSOR        3            // VDO_120C_LOOKUP
+#define INPUT_1_SENSOR        3            // VDO_120C_TABLE
 
 // ----- Input 2: OIL_PRESSURE -----
 #define INPUT_2_PIN           A3
 #define INPUT_2_APPLICATION   4            // OIL_PRESSURE
-#define INPUT_2_SENSOR        8            // VDO_5BAR
+#define INPUT_2_SENSOR        8            // VDO_5BAR_CURVE
 
 #endif // USE_STATIC_CONFIG
 ```
@@ -320,7 +320,7 @@ For maximum memory savings on Arduino Uno, use thin library generation:
 python3 tools/configure.py --generate-thin-libs
 ```
 
-This creates optimized versions of sensor_library.h and application_presets.h containing only the sensors you're using, significantly reducing flash usage.
+This creates optimized versions of the sensor library and application presets containing only the sensors you're using, significantly reducing flash usage.
 
 **Example savings:**
 ```
@@ -342,7 +342,7 @@ python3 tools/configure.py --platform uno
 # Configure 4 sensors:
 # - Input 0: CHT with MAX6675 on pin 6
 # - Input 1: Coolant with VDO_120C on A2
-# - Input 2: Oil pressure with VDO_5BAR on A3
+# - Input 2: Oil pressure with VDO_5BAR_CURVE on A3
 # - Input 3: Battery voltage on A6
 
 # Save as JSON
@@ -385,7 +385,9 @@ python3 tools/configure.py --load tools/saved-configs/uno_basic.json
 
 ## What Gets Disabled
 
-When using static builds (`USE_STATIC_CONFIG` defined):
+When using static builds (`USE_STATIC_CONFIG` defined in platformio.ini):
+
+**Note**: The `uno_static` environment in platformio.ini automatically enables `USE_STATIC_CONFIG` and excludes the ArduinoJson library, saving 4-8KB of flash.
 
 | Feature | Static Build | Default |
 |---------|--------------|---------|
@@ -425,7 +427,7 @@ Pin 13: ERROR - Reserved for SPI SCK
 Error: Could not find sensor_library.h
 ```
 
-**Solution:** Ensure you're in the project root and the source files exist.
+**Solution:** Ensure you're in the project root and the source files exist. The sensor library uses a modular structure with `sensor_library.h` as the orchestrator and sensor definitions in `sensor_library/sensors/*.h`.
 
 ### JSON file not loading
 
@@ -457,6 +459,3 @@ python3 tools/configure.py --load tools/saved-configs/my_config.json
 - **[Sensor Selection Guide](../guides/sensor-types/SENSOR_SELECTION_GUIDE.md)** - Sensor catalog
 - **[Advanced Calibration Guide](../guides/configuration/ADVANCED_CALIBRATION_GUIDE.md)** - Calibration details
 
----
-
-**For the classic car community.**

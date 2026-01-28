@@ -86,9 +86,27 @@ struct InputEEPROM {
 openEMS has **three registries**, all stored in PROGMEM (flash):
 
 ### 1. Sensor Library
-**File:** `src/lib/sensor_library.h`
-**Size:** ~20 sensors
-**Primary Key:** Sensor name (e.g., "MAX6675", "VDO_120C_LOOKUP")
+**File:** `src/lib/sensor_library.h` (orchestrator)
+**Modular Files:** `src/lib/sensor_library/sensors/*.h`
+**Size:** ~28 sensors
+**Primary Key:** Sensor name (e.g., "MAX6675", "VDO_120C_TABLE")
+
+**Structure:**
+```
+src/lib/sensor_library/
+├── sensor_types.h        # SensorInfo struct, forward declarations
+├── sensor_categories.h   # Category enum and helpers
+├── sensor_helpers.h      # Lookup functions
+└── sensors/              # Sensor definitions by type
+    ├── none.h            # Placeholder
+    ├── thermocouples.h   # MAX6675, MAX31855
+    ├── thermistors.h     # VDO, generic NTC
+    ├── pressure.h        # Linear, polynomial, table
+    ├── voltage.h         # Voltage divider
+    ├── frequency.h       # RPM, speed
+    ├── environmental.h   # BME280
+    └── digital.h         # Float switch
+```
 
 **Contains:**
 - Read function pointer
@@ -217,20 +235,20 @@ const char* name = (const char*)pgm_read_ptr(&SENSOR_LIBRARY[i].name);
 
 **Command:**
 ```
-SET A0 OIL_PRESSURE VDO_5BAR
+SET A0 OIL_PRESSURE VDO_5BAR_CURVE
 ```
 
 **1. Parse command** (`src/inputs/serial_config.cpp`)
 ```cpp
 const char* pinStr = "A0";
 const char* appName = "OIL_PRESSURE";
-const char* sensName = "VDO_5BAR";
+const char* sensName = "VDO_5BAR_CURVE";
 ```
 
 **2. Compute hashes** (`src/lib/hash.h`)
 ```cpp
 uint16_t appHash = djb2_hash("OIL_PRESSURE");   // 0x2361
-uint16_t sensHash = djb2_hash("VDO_5BAR");      // 0xC3F7
+uint16_t sensHash = djb2_hash("VDO_5BAR_CURVE");      // 0xC3F7
 ```
 
 **3. Lookup application** (`src/lib/application_presets.h`)
@@ -244,7 +262,7 @@ uint8_t appIndex = getApplicationIndexByHash(appHash);
 ```cpp
 uint8_t sensIndex = getSensorIndexByHash(sensHash);
 // Search PROGMEM for hash 0xC3F7
-// Returns index 11 (VDO_5BAR is 12th entry)
+// Returns index 11 (VDO_5BAR_CURVE is 12th entry)
 ```
 
 **5. Configure input** (`src/inputs/input_manager.cpp`)
@@ -393,7 +411,7 @@ MY_SENSOR_B  →  MY_SENSOR_B_V2
 
 | Registry | Header File | Size | Count |
 |----------|-------------|------|-------|
-| Sensors | `src/lib/sensor_library.h` | ~3KB | ~20 |
+| Sensors | `src/lib/sensor_library.h` + `sensor_library/sensors/*.h` | ~3KB | ~28 |
 | Applications | `src/lib/application_presets.h` | ~2KB | ~16 |
 | Units | `src/lib/units_registry.h` | ~500B | ~11 |
 | Hash Functions | `src/lib/hash.h` | ~2KB | N/A |
@@ -471,6 +489,3 @@ When EEPROM version mismatch detected, firmware resets EEPROM to defaults.
 - [Units Registry Header](../../src/lib/units_registry.h) - Units registry source code
 - [Hash Functions Header](../../src/lib/hash.h) - DJB2 hash implementation
 
----
-
-**For the classic car community.**

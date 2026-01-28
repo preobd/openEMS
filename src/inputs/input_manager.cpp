@@ -9,6 +9,9 @@
 #include "input_manager.h"
 #include "alarm_logic.h"
 #include "../lib/units_registry.h"
+#include "../lib/message_router.h"  // For msg.control
+#include "../lib/message_api.h"
+#include "../lib/log_tags.h"
 #ifdef USE_STATIC_CONFIG
 #include "../lib/generated/application_presets_static.h"
 #include "../lib/generated/sensor_library_static.h"
@@ -16,6 +19,7 @@
 #include "../lib/application_presets.h"
 #include "../lib/sensor_library.h"
 #endif
+#include "../lib/pin_registry.h"
 
 // ===== GLOBAL STATE =====
 Input inputs[MAX_INPUTS];
@@ -395,7 +399,7 @@ bool initInputManager() {
     // Configure inputs using the registry-based functions
     // This reuses the same runtime configuration logic
 
-    Serial.println(F("Initializing from static configuration..."));
+    msg.control.println(F("Initializing from static configuration..."));
 
     #ifdef INPUT_0_PIN
         CONFIGURE_INPUT(0, 0);
@@ -480,9 +484,9 @@ bool initInputManager() {
         }
     }
 
-    Serial.print(F("✓ Loaded "));
-    Serial.print(numActiveInputs);
-    Serial.println(F(" inputs from static config"));
+    msg.control.print(F("✓ Loaded "));
+    msg.control.print(numActiveInputs);
+    msg.control.println(F(" inputs from static config"));
     return true;  // Static config always valid
 
 #else
@@ -490,13 +494,15 @@ bool initInputManager() {
     // Try to load from EEPROM
     bool eepromLoaded = loadInputConfig();
     if (!eepromLoaded) {
-        Serial.println(F("No valid config in EEPROM - starting with blank configuration"));
+        msg.debug.info(TAG_CONFIG, "No valid config in EEPROM - starting with blank configuration");
     }
     return eepromLoaded;
 #endif
 }
 
 // ===== EEPROM PERSISTENCE =====
+
+#ifndef USE_STATIC_CONFIG
 
 /**
  * Calculate XOR checksum of all active inputs
@@ -577,9 +583,9 @@ bool saveInputConfig() {
         }
     }
 
-    Serial.print(F("✓ Saved "));
-    Serial.print(savedCount);
-    Serial.println(F(" inputs to EEPROM (hash-based)"));
+    msg.control.print(F("✓ Saved "));
+    msg.control.print(savedCount);
+    msg.control.println(F(" inputs to EEPROM (hash-based)"));
 
     // Calculate checksum
     uint8_t checksum = calculateConfigChecksum();
@@ -593,8 +599,7 @@ bool saveInputConfig() {
 
     EEPROM.put(0, header);
 
-    Serial.print(F("✓ Checksum: 0x"));
-    Serial.println(checksum, HEX);
+    msg.debug.debug(TAG_CONFIG, "Checksum: 0x%02X", checksum);
 
     return true;
 }
@@ -610,11 +615,7 @@ bool loadInputConfig() {
 
     // Check version
     if (header.version != EEPROM_VERSION) {
-        Serial.print(F("EEPROM version mismatch (found "));
-        Serial.print(header.version);
-        Serial.print(F(", expected "));
-        Serial.print(EEPROM_VERSION);
-        Serial.println(F(") - ignoring"));
+        msg.debug.warn(TAG_CONFIG, "EEPROM version mismatch (found %d, expected %d) - ignoring", header.version, EEPROM_VERSION);
         return false;
     }
 
@@ -688,11 +689,9 @@ bool loadInputConfig() {
     uint8_t calculatedChecksum = calculateConfigChecksum();
 
     if (storedChecksum != calculatedChecksum) {
-        Serial.print(F("ERROR: EEPROM checksum mismatch! Stored: 0x"));
-        Serial.print(storedChecksum, HEX);
-        Serial.print(F(", Calculated: 0x"));
-        Serial.println(calculatedChecksum, HEX);
-        Serial.println(F("Configuration may be corrupted. Please reconfigure."));
+        msg.control.println(F("ERROR: EEPROM checksum mismatch! Configuration corrupted."));
+        msg.control.println(F("Please reconfigure inputs and run SAVE."));
+        msg.debug.error(TAG_CONFIG, "Checksum mismatch: Stored 0x%02X, Calculated 0x%02X", storedChecksum, calculatedChecksum);
 
         // Clear corrupted data
         memset(inputs, 0, sizeof(inputs));
@@ -704,12 +703,8 @@ bool loadInputConfig() {
         return false;
     }
 
-    Serial.print(F("✓ Checksum verified: 0x"));
-    Serial.println(storedChecksum, HEX);
-
-    Serial.print(F("✓ Loaded "));
-    Serial.print(numActiveInputs);
-    Serial.println(F(" inputs from EEPROM"));
+    msg.debug.debug(TAG_CONFIG, "Checksum verified: 0x%02X", storedChecksum);
+    msg.debug.info(TAG_CONFIG, "Loaded %d inputs from EEPROM", numActiveInputs);
     return true;
 }
 
@@ -725,8 +720,10 @@ void resetInputConfig() {
     }
     numActiveInputs = 0;
 
-    Serial.println(F("Configuration reset"));
+    msg.control.println(F("Configuration reset"));
 }
+
+#endif // USE_STATIC_CONFIG
 
 // ===== HELPER FUNCTIONS =====
 
@@ -794,6 +791,20 @@ static uint8_t findFreeSlot() {
 static bool validateInputConfig(Input* input) {
     if (!input) return false;
 
+    // Check if pin is reserved by a bus (I2C, SPI, CAN)
+    // Skip this check for virtual pins (I2C sensors use 0xF0+)
+    if (input->pin < 0xF0 && !isPinAvailable(input->pin)) {
+        msg.control.print(F("ERROR: Pin "));
+        if (input->pin >= A0) {
+            msg.control.print(F("A"));
+            msg.control.print(input->pin - A0);
+        } else {
+            msg.control.print(input->pin);
+        }
+        msg.control.println(F(" is reserved by a bus (I2C/SPI/CAN)"));
+        return false;
+    }
+
     // Check for pin conflicts with other enabled inputs
     for (uint8_t i = 0; i < MAX_INPUTS; i++) {
         Input* other = &inputs[i];
@@ -805,16 +816,16 @@ static bool validateInputConfig(Input* input) {
 
         // Check if another enabled input uses the same pin
         if (other->flags.isEnabled && other->pin == input->pin) {
-            Serial.print(F("ERROR: Pin "));
+            msg.control.print(F("ERROR: Pin "));
             if (input->pin >= 0xF0) {
-                Serial.print(F("I2C"));
+                msg.control.print(F("I2C"));
             } else if (input->pin >= A0) {
-                Serial.print(F("A"));
-                Serial.print(input->pin - A0);
+                msg.control.print(F("A"));
+                msg.control.print(input->pin - A0);
             } else {
-                Serial.print(input->pin);
+                msg.control.print(input->pin);
             }
-            Serial.println(F(" already in use"));
+            msg.control.println(F(" already in use"));
             return false;
         }
     }
@@ -822,11 +833,11 @@ static bool validateInputConfig(Input* input) {
     // Check alarm threshold sanity (only if alarms enabled)
     if (input->flags.alarm) {
         if (input->minValue >= input->maxValue) {
-            Serial.print(F("ERROR: Invalid alarm range ("));
-            Serial.print(input->minValue);
-            Serial.print(F(" >= "));
-            Serial.print(input->maxValue);
-            Serial.println(F(")"));
+            msg.control.print(F("ERROR: Invalid alarm range ("));
+            msg.control.print(input->minValue);
+            msg.control.print(F(" >= "));
+            msg.control.print(input->maxValue);
+            msg.control.println(F(")"));
             return false;
         }
     }
@@ -843,10 +854,10 @@ bool setInputApplication(uint8_t pin, uint8_t appIndex) {
     if (input == nullptr) {
         uint8_t slot = findFreeSlot();
         if (slot == 0xFF) {
-            Serial.print(F("ERROR: No free input slots (max "));
-            Serial.print(MAX_INPUTS);
-            Serial.println(F(" inputs)"));
-            Serial.println(F("  Hint: Use 'CLEAR <pin>' to remove an existing input"));
+            msg.control.print(F("ERROR: No free input slots (max "));
+            msg.control.print(MAX_INPUTS);
+            msg.control.println(F(" inputs)"));
+            msg.control.println(F("  Hint: Use 'CLEAR <pin>' to remove an existing input"));
             return false;
         }
         input = &inputs[slot];
@@ -856,7 +867,7 @@ bool setInputApplication(uint8_t pin, uint8_t appIndex) {
     // Get Application preset from flash
     const ApplicationPreset* flashPreset = getApplicationByIndex(appIndex);
     if (flashPreset == nullptr) {
-        Serial.println(F("ERROR: Invalid Type"));
+        msg.control.println(F("ERROR: Invalid Type"));
         return false;
     }
 
@@ -922,14 +933,14 @@ bool setInputApplication(uint8_t pin, uint8_t appIndex) {
 bool setInputSensor(uint8_t pin, uint8_t sensorIndex) {
     Input* input = getInputByPin(pin);
     if (input == nullptr) {
-        Serial.println(F("ERROR: Input not configured"));
+        msg.control.println(F("ERROR: Input not configured"));
         return false;
     }
 
     // Get Sensor info from flash
     const SensorInfo* flashInfo = getSensorByIndex(sensorIndex);
     if (flashInfo == nullptr) {
-        Serial.println(F("ERROR: Invalid Sensor Type"));
+        msg.control.println(F("ERROR: Invalid Sensor Type"));
         return false;
     }
 
@@ -989,13 +1000,13 @@ bool setInputAlarmRange(uint8_t pin, float minValue, float maxValue) {
     Input* input = getInputByPin(pin);
     if (input == nullptr) return false;
 
-    // Validate range
-    if (minValue >= maxValue) {
-        Serial.print(F("ERROR: Min alarm ("));
-        Serial.print(minValue);
-        Serial.print(F(") must be less than max alarm ("));
-        Serial.print(maxValue);
-        Serial.println(F(")"));
+    // Validate range (allow both to be 0 for disabled alarms)
+    if (minValue >= maxValue && !(minValue == 0 && maxValue == 0)) {
+        msg.control.print(F("ERROR: Min alarm ("));
+        msg.control.print(minValue);
+        msg.control.print(F(") must be less than max alarm ("));
+        msg.control.print(maxValue);
+        msg.control.println(F(")"));
         return false;
     }
 
@@ -1004,20 +1015,20 @@ bool setInputAlarmRange(uint8_t pin, float minValue, float maxValue) {
     if (sensorInfo && input->sensorIndex != 0) {  // Skip validation for SENSOR_NONE
         // Check if alarm range exceeds sensor's physical capabilities
         if (minValue < sensorInfo->minValue || maxValue > sensorInfo->maxValue) {
-            Serial.print(F("WARNING: Alarm range ("));
-            Serial.print(minValue);
-            Serial.print(F(" - "));
-            Serial.print(maxValue);
-            Serial.print(F(") exceeds sensor capability ("));
-            Serial.print(sensorInfo->minValue);
-            Serial.print(F(" - "));
-            Serial.print(sensorInfo->maxValue);
+            msg.control.print(F("WARNING: Alarm range ("));
+            msg.control.print(minValue);
+            msg.control.print(F(" - "));
+            msg.control.print(maxValue);
+            msg.control.print(F(") exceeds sensor capability ("));
+            msg.control.print(sensorInfo->minValue);
+            msg.control.print(F(" - "));
+            msg.control.print(sensorInfo->maxValue);
 
             // Print sensor name for clarity
             char sensorName[32];
             strcpy_P(sensorName, (const char*)sensorInfo->name);
-            Serial.print(F(") for "));
-            Serial.println(sensorName);
+            msg.control.print(F(") for "));
+            msg.control.println(sensorName);
 
             // Don't fail - allow the user to set it, but warn them
             // This is useful for sensors that might be replaced or for edge cases
@@ -1158,6 +1169,9 @@ bool clearInputCalibration(uint8_t pin) {
 }
 
 // ===== RUNTIME =====
+
+#ifndef USE_STATIC_CONFIG
+
 void readAllInputs() {
     for (uint8_t i = 0; i < MAX_INPUTS; i++) {
         if (inputs[i].pin != 0xFF && inputs[i].flags.isEnabled && inputs[i].readFunction != nullptr) {
@@ -1167,157 +1181,452 @@ void readAllInputs() {
 }
 
 // ===== INFO/LISTING =====
+
+// Helper to print alarm state
+static void printAlarmState(AlarmState state) {
+    switch (state) {
+        case ALARM_DISABLED: msg.control.print(F("DISABLED")); break;
+        case ALARM_INIT: msg.control.print(F("INIT")); break;
+        case ALARM_WARMUP: msg.control.print(F("WARMUP")); break;
+        case ALARM_READY: msg.control.print(F("READY")); break;
+        case ALARM_ACTIVE: msg.control.print(F("ACTIVE")); break;
+        default: msg.control.print(F("UNKNOWN")); break;
+    }
+}
+
+// Helper to print pin name (A0, 1, I2C:0, etc)
+static void printPin(uint8_t pin) {
+    if (pin >= 0xF0) {
+        msg.control.print(F("I2C:"));
+        msg.control.print(pin - 0xF0);
+    } else if (pin >= A0) {
+        msg.control.print(F("A"));
+        msg.control.print(pin - A0);
+    } else {
+        msg.control.print(pin);
+    }
+}
+
 void printInputInfo(uint8_t pin) {
     Input* input = getInputByPin(pin);
-    if (input == nullptr) {
-        Serial.println(F("Input not configured"));
+    if (!input) {
+        msg.control.print(F("ERROR: Input for pin "));
+        printPin(pin);
+        msg.control.println(F(" not found"));
         return;
     }
 
-    Serial.println(F("Input Configuration:"));
-    Serial.print(F("  Pin: "));
-    if (pin >= 0xF0) {
-        // Show virtual pin number (I2C:0, I2C:1, etc.)
-        Serial.print(F("I2C:"));
-        Serial.println(pin - 0xF0);
-    } else if (pin >= A0) {
-        Serial.print(F("A"));
-        Serial.println(pin - A0);
-    } else {
-        Serial.println(pin);
-    }
-    Serial.print(F("  Name: "));
-    Serial.println(input->abbrName);
+    msg.control.println();
+    msg.control.print(F("===== Input Info ["));
+    printPin(pin);
+    msg.control.print(F("] ====="));
+    msg.control.println();
 
-    // Print application name from PROGMEM
-    Serial.print(F("  Application: "));
-    const ApplicationPreset* appPreset = getApplicationByIndex(input->applicationIndex);
-    if (appPreset) {
-        const char* label = READ_APP_LABEL(appPreset);
-        Serial.println((const __FlashStringHelper*)label);
-    } else {
-        Serial.print(F("UNKNOWN ("));
-        Serial.print(input->applicationIndex);
-        Serial.println(F(")"));
+    msg.control.print(F("  Enabled: "));
+    msg.control.println(input->flags.isEnabled ? F("YES") : F("NO"));
+
+    msg.control.print(F("  Application: "));
+    msg.control.println(getApplicationNameByIndex(input->applicationIndex));
+
+    msg.control.print(F("  Sensor: "));
+    msg.control.println(getSensorNameByIndex(input->sensorIndex));
+
+    msg.control.print(F("  Display Name: '"));
+    msg.control.print(input->displayName);
+    msg.control.println(F("'"));
+
+    msg.control.print(F("  Short Name: '"));
+    msg.control.print(input->abbrName);
+    msg.control.println(F("'"));
+
+    msg.control.print(F("  Units: "));
+    msg.control.println(getUnitStringByIndex(input->unitsIndex));
+
+    msg.control.print(F("  Alarm Status: "));
+    printAlarmState(input->alarmContext.state);
+    msg.control.println();
+
+    msg.control.print(F("  Current Value: "));
+    msg.control.print(input->value, 2);
+    msg.control.print(F(" "));
+    msg.control.println(getUnitStringByIndex(input->unitsIndex));
+
+    msg.control.println();
+    msg.control.println(F("To see alarm config: INFO <pin> ALARM"));
+    msg.control.println(F("To see calibration:  INFO <pin> CALIBRATION"));
+    msg.control.println();
+}
+
+void printInputAlarmInfo(uint8_t pin) {
+    Input* input = getInputByPin(pin);
+    if (!input) {
+        msg.control.print(F("ERROR: Input for pin "));
+        printPin(pin);
+        msg.control.println(F(" not found"));
+        return;
     }
 
-    // Print sensor name from PROGMEM
-    Serial.print(F("  Sensor Type: "));
-    const SensorInfo* sensorInfo = getSensorByIndex(input->sensorIndex);
-    if (sensorInfo) {
-        const char* label = READ_SENSOR_LABEL(sensorInfo);
-        Serial.println((const __FlashStringHelper*)label);
-    } else {
-        Serial.print(F("UNKNOWN ("));
-        Serial.print(input->sensorIndex);
-        Serial.println(F(")"));
+    msg.control.println();
+    msg.control.print(F("===== Alarm Info ["));
+    printPin(pin);
+    msg.control.print(F("] ====="));
+    msg.control.println();
+
+    msg.control.print(F("  Enabled: "));
+    msg.control.println(input->flags.alarm ? F("YES") : F("NO"));
+
+    msg.control.print(F("  State: "));
+    printAlarmState(input->alarmContext.state);
+    msg.control.println();
+
+    msg.control.print(F("  Min Threshold: "));
+    msg.control.println(input->minValue, 2);
+    msg.control.print(F("  Max Threshold: "));
+    msg.control.println(input->maxValue, 2);
+
+    msg.control.print(F("  Warmup Time: "));
+    msg.control.print(input->alarmContext.warmupTime_ms);
+    msg.control.println(F(" ms"));
+
+    msg.control.print(F("  Persistence Time: "));
+    msg.control.print(input->alarmContext.persistTime_ms);
+    msg.control.println(F(" ms"));
+
+    msg.control.print(F("  Time in State: "));
+    extern unsigned long millis(void);
+    msg.control.print(millis() - input->alarmContext.stateEntryTime);
+    msg.control.println(F(" ms"));
+
+    msg.control.println();
+}
+
+void printInputCalibration(uint8_t pin) {
+    Input* input = getInputByPin(pin);
+    if (!input) {
+        msg.control.print(F("ERROR: Input for pin "));
+        printPin(pin);
+        msg.control.println(F(" not found"));
+        return;
     }
-    Serial.print(F("  Units: "));
-    Serial.println(input->unitsIndex);
-    Serial.print(F("  Alarm Range: "));
-    Serial.print(input->minValue);
-    Serial.print(F(" - "));
-    Serial.println(input->maxValue);
-    Serial.print(F("  Value: "));
-    Serial.println(input->value);
-    Serial.print(F("  Enabled: "));
-    Serial.println(input->flags.isEnabled ? F("Yes") : F("No"));
-    Serial.print(F("  Alarm: "));
-    Serial.println(input->flags.alarm ? F("Yes") : F("No"));
-    Serial.print(F("  Display: "));
-    Serial.println(input->flags.display ? F("Yes") : F("No"));
+
+    msg.control.println();
+    msg.control.print(F("===== Calibration ["));
+    printPin(pin);
+    msg.control.print(F("] ====="));
+    msg.control.println();
+    msg.control.print(F("  Type: "));
+    if (!input->flags.useCustomCalibration) {
+        msg.control.println(F("Preset (PROGMEM)"));
+    } else if (input->calibrationType == CAL_THERMISTOR_STEINHART) {
+        msg.control.println(F("Steinhart-Hart Custom"));
+        msg.control.print(F("  Bias Resistor: "));
+        msg.control.print(input->customCalibration.steinhart.bias_resistor, 1);
+        msg.control.println(F(" Ω"));
+        msg.control.print(F("  A: "));
+        msg.control.println(input->customCalibration.steinhart.steinhart_a, 10);
+        msg.control.print(F("  B: "));
+        msg.control.println(input->customCalibration.steinhart.steinhart_b, 10);
+        msg.control.print(F("  C: "));
+        msg.control.println(input->customCalibration.steinhart.steinhart_c, 10);
+    } else if (input->calibrationType == CAL_THERMISTOR_BETA) {
+        msg.control.println(F("Beta Custom"));
+        msg.control.print(F("  Bias Resistor: "));
+        msg.control.print(input->customCalibration.beta.bias_resistor, 1);
+        msg.control.println(F(" Ω"));
+        msg.control.print(F("  Beta: "));
+        msg.control.println(input->customCalibration.beta.beta, 1);
+        msg.control.print(F("  R0: "));
+        msg.control.print(input->customCalibration.beta.r0, 1);
+        msg.control.println(F(" Ω"));
+        msg.control.print(F("  T0: "));
+        msg.control.print(input->customCalibration.beta.t0, 2);
+        msg.control.println(F(" K"));
+    } else if (input->calibrationType == CAL_LINEAR) {
+        msg.control.println(F("Linear Custom"));
+        msg.control.print(F("  Voltage Range: "));
+        msg.control.print(input->customCalibration.pressureLinear.voltage_min, 2);
+        msg.control.print(F("-"));
+        msg.control.print(input->customCalibration.pressureLinear.voltage_max, 2);
+        msg.control.println(F(" V"));
+        msg.control.print(F("  Output Range: "));
+        msg.control.print(input->customCalibration.pressureLinear.output_min, 2);
+        msg.control.print(F("-"));
+        msg.control.print(input->customCalibration.pressureLinear.output_max, 2);
+        msg.control.println();
+    } else if (input->calibrationType == CAL_PRESSURE_POLYNOMIAL) {
+        msg.control.println(F("Polynomial Custom (VDO)"));
+        msg.control.print(F("  Bias Resistor: "));
+        msg.control.print(input->customCalibration.pressurePolynomial.bias_resistor, 1);
+        msg.control.println(F(" Ω"));
+        msg.control.print(F("  A: "));
+        msg.control.println(input->customCalibration.pressurePolynomial.poly_a, 10);
+        msg.control.print(F("  B: "));
+        msg.control.println(input->customCalibration.pressurePolynomial.poly_b, 10);
+        msg.control.print(F("  C: "));
+        msg.control.println(input->customCalibration.pressurePolynomial.poly_c, 10);
+    } else if (input->calibrationType == CAL_RPM) {
+        msg.control.println(F("RPM Custom"));
+        msg.control.print(F("  Poles: "));
+        msg.control.println(input->customCalibration.rpm.poles);
+        msg.control.print(F("  Pulley Ratio: "));
+        msg.control.println(input->customCalibration.rpm.pulley_ratio, 2);
+        msg.control.print(F("  Calibration Mult: "));
+        msg.control.println(input->customCalibration.rpm.calibration_mult, 4);
+        msg.control.print(F("  Timeout: "));
+        msg.control.print(input->customCalibration.rpm.timeout_ms);
+        msg.control.println(F(" ms"));
+        msg.control.print(F("  RPM Range: "));
+        msg.control.print(input->customCalibration.rpm.min_rpm);
+        msg.control.print(F("-"));
+        msg.control.println(input->customCalibration.rpm.max_rpm);
+    } else if (input->calibrationType == CAL_SPEED) {
+        msg.control.println(F("Speed Custom"));
+        msg.control.print(F("  Pulses/Rev: "));
+        msg.control.println(input->customCalibration.speed.pulses_per_rev);
+        msg.control.print(F("  Tire Circumference: "));
+        msg.control.print(input->customCalibration.speed.tire_circumference_mm);
+        msg.control.println(F(" mm"));
+        msg.control.print(F("  Drive Ratio: "));
+        msg.control.println(input->customCalibration.speed.final_drive_ratio, 2);
+        msg.control.print(F("  Calibration Mult: "));
+        msg.control.println(input->customCalibration.speed.calibration_mult, 4);
+        msg.control.print(F("  Timeout: "));
+        msg.control.print(input->customCalibration.speed.timeout_ms);
+        msg.control.println(F(" ms"));
+        msg.control.print(F("  Max Speed: "));
+        msg.control.print(input->customCalibration.speed.max_speed_kph);
+        msg.control.println(F(" km/h"));
+    }
+    msg.control.println();
 }
 
 void listAllInputs() {
-    Serial.println(F("Active Inputs:"));
+    msg.control.println(F("Active Inputs:"));
     bool found = false;
 
     for (uint8_t i = 0; i < MAX_INPUTS; i++) {
         if (inputs[i].pin != 0xFF && inputs[i].flags.isEnabled) {
             found = true;
-            Serial.print(F("  "));
+            msg.control.print(F("  "));
             if (inputs[i].pin >= 0xF0) {
-                Serial.print(F("I2C:"));
-                Serial.print(inputs[i].pin - 0xF0);
+                msg.control.print(F("I2C:"));
+                msg.control.print(inputs[i].pin - 0xF0);
             } else if (inputs[i].pin >= A0) {
-                Serial.print(F("A"));
-                Serial.print(inputs[i].pin - A0);
+                msg.control.print(F("A"));
+                msg.control.print(inputs[i].pin - A0);
             } else {
-                Serial.print(inputs[i].pin);
+                msg.control.print(inputs[i].pin);
             }
-            Serial.print(F(": "));
-            Serial.print(inputs[i].abbrName);
-            Serial.print(F(" ("));
-            Serial.print(inputs[i].displayName);
-            Serial.print(F(") = "));
-            Serial.print(inputs[i].value);
-            Serial.print(F(" "));
-            Serial.println((__FlashStringHelper*)getUnitStringByIndex(inputs[i].unitsIndex));
+            msg.control.print(F(": "));
+            msg.control.print(inputs[i].abbrName);
+            msg.control.print(F(" ("));
+            msg.control.print(inputs[i].displayName);
+            msg.control.print(F(") = "));
+            msg.control.print(inputs[i].value);
+            msg.control.print(F(" "));
+            msg.control.println((__FlashStringHelper*)getUnitStringByIndex(inputs[i].unitsIndex));
         }
     }
 
     if (!found) {
-        Serial.println(F("  (none)"));
+        msg.control.println(F("  (none)"));
     }
 }
 
 void listApplicationPresets() {
-    Serial.println(F("Available Application Presets:"));
-    Serial.println(F("Temperature:"));
-    Serial.println(F("  CHT                 - Cylinder Head Temp"));
-    Serial.println(F("  EGT                 - Exhaust Gas Temp"));
-    Serial.println(F("  COOLANT_TEMP        - Coolant Temperature"));
-    Serial.println(F("  OIL_TEMP            - Oil Temperature"));
-    Serial.println(F("  TCASE_TEMP          - Transfer Case/Trans Temp"));
-    Serial.println(F("  AMBIENT_TEMP        - Outside Air Temp"));
-    Serial.println(F("Pressure:"));
-    Serial.println(F("  OIL_PRESSURE        - Oil Pressure"));
-    Serial.println(F("  BOOST_PRESSURE      - Turbo/Supercharger Boost"));
-    Serial.println(F("  FUEL_PRESSURE       - Fuel System Pressure"));
-    Serial.println(F("  BAROMETRIC_PRESSURE - Atmospheric Pressure"));
-    Serial.println(F("Electrical:"));
-    Serial.println(F("  PRIMARY_BATTERY     - Main Battery Voltage"));
-    Serial.println(F("  AUXILIARY_BATTERY   - Aux Battery Voltage"));
-    Serial.println(F("Other:"));
-    Serial.println(F("  COOLANT_LEVEL       - Coolant Level (Float)"));
-    Serial.println(F("  HUMIDITY            - Relative Humidity"));
-    Serial.println(F("  ELEVATION           - Altitude"));
-    Serial.println(F("  ENGINE_RPM          - Engine Speed (W-phase)"));
+    msg.control.println(F("Available Application Presets:"));
+
+    // Group by measurement type
+    msg.control.println(F("Temperature:"));
+    for (uint8_t i = 1; i < NUM_APPLICATION_PRESETS; i++) {
+        const ApplicationPreset* preset = &APPLICATION_PRESETS[i];
+        MeasurementType type = (MeasurementType)pgm_read_byte(&preset->expectedMeasurementType);
+        if (type == MEASURE_TEMPERATURE) {
+            const char* name = READ_APP_NAME(preset);
+            const char* label = READ_APP_LABEL(preset);
+            msg.control.print(F("  "));
+            msg.control.print((__FlashStringHelper*)name);
+            // Pad to 20 chars for alignment
+            uint8_t nameLen = strlen_P(name);
+            for (uint8_t j = nameLen; j < 20; j++) msg.control.write(' ');
+            msg.control.print(F("- "));
+            msg.control.println((__FlashStringHelper*)label);
+        }
+    }
+
+    msg.control.println(F("Pressure:"));
+    for (uint8_t i = 1; i < NUM_APPLICATION_PRESETS; i++) {
+        const ApplicationPreset* preset = &APPLICATION_PRESETS[i];
+        MeasurementType type = (MeasurementType)pgm_read_byte(&preset->expectedMeasurementType);
+        if (type == MEASURE_PRESSURE) {
+            const char* name = READ_APP_NAME(preset);
+            const char* label = READ_APP_LABEL(preset);
+            msg.control.print(F("  "));
+            msg.control.print((__FlashStringHelper*)name);
+            uint8_t nameLen = strlen_P(name);
+            for (uint8_t j = nameLen; j < 20; j++) msg.control.write(' ');
+            msg.control.print(F("- "));
+            msg.control.println((__FlashStringHelper*)label);
+        }
+    }
+
+    msg.control.println(F("Electrical:"));
+    for (uint8_t i = 1; i < NUM_APPLICATION_PRESETS; i++) {
+        const ApplicationPreset* preset = &APPLICATION_PRESETS[i];
+        MeasurementType type = (MeasurementType)pgm_read_byte(&preset->expectedMeasurementType);
+        if (type == MEASURE_VOLTAGE) {
+            const char* name = READ_APP_NAME(preset);
+            const char* label = READ_APP_LABEL(preset);
+            msg.control.print(F("  "));
+            msg.control.print((__FlashStringHelper*)name);
+            uint8_t nameLen = strlen_P(name);
+            for (uint8_t j = nameLen; j < 20; j++) msg.control.write(' ');
+            msg.control.print(F("- "));
+            msg.control.println((__FlashStringHelper*)label);
+        }
+    }
+
+    msg.control.println(F("Other:"));
+    for (uint8_t i = 1; i < NUM_APPLICATION_PRESETS; i++) {
+        const ApplicationPreset* preset = &APPLICATION_PRESETS[i];
+        MeasurementType type = (MeasurementType)pgm_read_byte(&preset->expectedMeasurementType);
+        if (type != MEASURE_TEMPERATURE && type != MEASURE_PRESSURE && type != MEASURE_VOLTAGE) {
+            const char* name = READ_APP_NAME(preset);
+            const char* label = READ_APP_LABEL(preset);
+            msg.control.print(F("  "));
+            msg.control.print((__FlashStringHelper*)name);
+            uint8_t nameLen = strlen_P(name);
+            for (uint8_t j = nameLen; j < 20; j++) msg.control.write(' ');
+            msg.control.print(F("- "));
+            msg.control.println((__FlashStringHelper*)label);
+        }
+    }
 }
 
-void listSensors() {
-    Serial.println(F("Available Sensor Types:"));
-    Serial.println(F("Thermocouples:"));
-    Serial.println(F("  MAX6675                - K-type via MAX6675 (0-1024°C)"));
-    Serial.println(F("  MAX31855               - K-type via MAX31855 (-270-1372°C)"));
-    Serial.println(F("Thermistors (VDO):"));
-    Serial.println(F("  VDO_120C_LOOKUP        - VDO 120°C (lookup table)"));
-    Serial.println(F("  VDO_150C_LOOKUP        - VDO 150°C (lookup table)"));
-    Serial.println(F("  VDO_120C_STEINHART     - VDO 120°C (Steinhart-Hart)"));
-    Serial.println(F("  VDO_150C_STEINHART     - VDO 150°C (Steinhart-Hart)"));
-    Serial.println(F("Thermistors (Generic):"));
-    Serial.println(F("  THERMISTOR_LOOKUP      - Generic (requires custom cal)"));
-    Serial.println(F("  THERMISTOR_STEINHART   - Generic (requires custom cal)"));
-    Serial.println(F("Temperature (Linear - 5V sensors):"));
-    Serial.println(F("  GENERIC_TEMP_LINEAR    - 0.5-4.5V linear (-40 to 150°C)"));
-    Serial.println(F("Pressure (Linear - 5V sensors):"));
-    Serial.println(F("  GENERIC_BOOST          - 0.5-4.5V linear (0-5 bar)"));
-    Serial.println(F("  GENERIC_PRESSURE_150PSI - 0.5-4.5V linear (0-150 PSI / 10 bar)"));
-    Serial.println(F("  AEM_30_2130_150        - AEM 150 PSI (0-150 PSI / 10 bar)"));
-    Serial.println(F("  MPX4250AP              - Freescale/NXP (20-250 kPa)"));
-    Serial.println(F("Pressure (VDO Polynomial):"));
-    Serial.println(F("  VDO_2BAR               - VDO 2-bar pressure"));
-    Serial.println(F("  VDO_5BAR               - VDO 5-bar pressure"));
-    Serial.println(F("Other:"));
-    Serial.println(F("  VOLTAGE_DIVIDER        - Battery voltage (12V divider)"));
-    Serial.println(F("  W_PHASE_RPM            - W-phase alternator RPM"));
-    Serial.println(F("  BME280_TEMP            - BME280 temperature (I2C)"));
-    Serial.println(F("  BME280_PRESSURE        - BME280 barometric pressure (I2C)"));
-    Serial.println(F("  BME280_HUMIDITY        - BME280 relative humidity (I2C)"));
-    Serial.println(F("  BME280_ELEVATION       - BME280 altitude (I2C)"));
-    Serial.println(F("  FLOAT_SWITCH           - Float/level switch (digital)"));
-    Serial.println();
-    Serial.println(F("IMPORTANT: 5V sensors (0.5-4.5V) require voltage dividers for 3.3V systems!"));
-    Serial.println(F("Note: Use 'I2C' for new I2C sensors, 'I2C:0', 'I2C:1' etc. for existing ones"));
-    Serial.println(F("      Examples: SET I2C AMBIENT_TEMP BME280_TEMP  or  INFO I2C:0"));
+/**
+ * List sensors - supports three modes:
+ *   1. No filter: Show category summary with sensor counts
+ *   2. Category filter: Show sensors in that category (e.g., "NTC_THERMISTOR", "NTC")
+ *   3. Measurement filter: Show all sensors of that type (e.g., "TEMPERATURE", "PRESSURE")
+ */
+void listSensors(const char* filter) {
+    // Helper lambda to print a single sensor
+    auto printSensor = [](const SensorInfo* sensor) {
+        const char* name = READ_SENSOR_NAME(sensor);
+        const char* label = (const char*)pgm_read_ptr(&sensor->label);
+        msg.control.print(F("  "));
+        msg.control.print((__FlashStringHelper*)name);
+        uint8_t nameLen = strlen_P(name);
+        for (uint8_t j = nameLen; j < 24; j++) msg.control.write(' ');
+        msg.control.print(F("- "));
+        if (label) msg.control.println((__FlashStringHelper*)label);
+        else msg.control.println();
+    };
+
+    // No filter: Show category summary
+    if (filter == nullptr) {
+        msg.control.println(F("Sensor Categories:"));
+        msg.control.println();
+
+        for (uint8_t cat = 0; cat < CAT_COUNT; cat++) {
+            uint8_t count = countSensorsInCategory((SensorCategory)cat);
+            if (count > 0) {
+                const SensorCategoryInfo* catInfo = getCategoryInfo((SensorCategory)cat);
+                const char* catName = READ_CATEGORY_NAME(catInfo);
+                const char* catLabel = READ_CATEGORY_LABEL(catInfo);
+
+                msg.control.print(F("  "));
+                msg.control.print((__FlashStringHelper*)catName);
+                uint8_t nameLen = strlen_P(catName);
+                for (uint8_t j = nameLen; j < 20; j++) msg.control.write(' ');
+                msg.control.print(F("- "));
+                msg.control.print((__FlashStringHelper*)catLabel);
+                msg.control.print(F(" ("));
+                msg.control.print(count);
+                msg.control.println(F(")"));
+            }
+        }
+
+        msg.control.println();
+        msg.control.println(F("Measurement Type Filters:"));
+        msg.control.print(F("  TEMPERATURE           - All temperature sensors ("));
+        msg.control.print(countSensorsByMeasurementType(MEASURE_TEMPERATURE));
+        msg.control.println(F(")"));
+        msg.control.print(F("  PRESSURE              - All pressure sensors ("));
+        msg.control.print(countSensorsByMeasurementType(MEASURE_PRESSURE));
+        msg.control.println(F(")"));
+
+        msg.control.println();
+        msg.control.println(F("Usage: LIST SENSORS <category>    - Show sensors in category"));
+        msg.control.println(F("       LIST SENSORS TEMPERATURE   - Show all temperature sensors"));
+        msg.control.println(F("       SET <pin> SENSOR <category> <preset>"));
+        msg.control.println();
+        msg.control.println(F("Aliases: NTC -> THERMISTOR"));
+        msg.control.println(F("         TC -> THERMOCOUPLE"));
+        msg.control.println(F("         RPM, SPEED -> FREQUENCY"));
+        return;
+    }
+
+    // Check if filter is a measurement type (TEMPERATURE, PRESSURE)
+    int8_t measFilter = getMeasurementTypeFilter(filter);
+    if (measFilter >= 0) {
+        MeasurementType measType = (MeasurementType)measFilter;
+        const char* typeName = (measType == MEASURE_TEMPERATURE) ? "Temperature" : "Pressure";
+
+        msg.control.print(F("All "));
+        msg.control.print(typeName);
+        msg.control.println(F(" Sensors:"));
+        msg.control.println();
+
+        for (uint8_t i = 1; i < NUM_SENSORS; i++) {
+            const SensorInfo* sensor = &SENSOR_LIBRARY[i];
+            if (pgm_read_ptr(&sensor->label) == nullptr) continue;
+
+            MeasurementType sensorMeasType = (MeasurementType)pgm_read_byte(&sensor->measurementType);
+            if (sensorMeasType == measType) {
+                printSensor(sensor);
+            }
+        }
+
+        msg.control.println();
+        msg.control.println(F("IMPORTANT: 5V sensors (0.5-4.5V) require voltage dividers for 3.3V systems!"));
+        return;
+    }
+
+    // Check if filter is a category name or alias
+    SensorCategory cat = getCategoryByName(filter);
+    if (cat < CAT_COUNT) {
+        const SensorCategoryInfo* catInfo = getCategoryInfo(cat);
+        const char* catLabel = READ_CATEGORY_LABEL(catInfo);
+
+        msg.control.print((__FlashStringHelper*)catLabel);
+        msg.control.println(F(":"));
+        msg.control.println();
+
+        for (uint8_t i = 1; i < NUM_SENSORS; i++) {
+            const SensorInfo* sensor = &SENSOR_LIBRARY[i];
+            if (pgm_read_ptr(&sensor->label) == nullptr) continue;
+
+            if (getSensorCategory(i) == cat) {
+                printSensor(sensor);
+            }
+        }
+
+        msg.control.println();
+        msg.control.println(F("Usage: SET <pin> SENSOR <category> <preset>"));
+        if (cat == CAT_ENVIRONMENTAL) {
+            msg.control.println(F("Note: Use 'I2C' for pin, e.g., SET I2C AMBIENT_TEMP BME280_TEMP"));
+        } else if (cat == CAT_PRESSURE || cat == CAT_THERMISTOR) {
+            msg.control.println(F("IMPORTANT: 5V sensors (0.5-4.5V) require voltage dividers for 3.3V systems!"));
+        }
+        return;
+    }
+
+    // Unknown filter
+    msg.control.print(F("ERROR: Unknown category or filter '"));
+    msg.control.print(filter);
+    msg.control.println(F("'"));
+    msg.control.println(F("Use: LIST SENSORS to see available categories"));
 }
+
+#endif // USE_STATIC_CONFIG

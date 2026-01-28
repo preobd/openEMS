@@ -23,7 +23,16 @@ openEMS/
 │   │   ├── input.h            # Input structure definitions
 │   │   ├── input_manager.cpp  # Input configuration management
 │   │   ├── input_manager.h    # Input manager exports
-│   │   ├── sensor_read.cpp    # Sensor reading functions
+│   │   ├── sensors/           # Modular sensor reading implementations
+│   │   │   ├── thermistors/   # Thermistor sensors (lookup, Steinhart, beta)
+│   │   │   ├── thermocouples/ # Thermocouple sensors (MAX6675, MAX31855)
+│   │   │   ├── pressure/      # Pressure sensors (linear, polynomial)
+│   │   │   ├── voltage/       # Voltage sensors (direct, divider)
+│   │   │   ├── linear/        # Generic linear sensors
+│   │   │   ├── rpm/           # RPM sensors (W-phase)
+│   │   │   ├── digital/       # Digital sensors (float switch)
+│   │   │   ├── environmental/ # Environmental sensors (BME280)
+│   │   │   └── sensor_utils.* # Shared utility functions
 │   │   ├── serial_config.h    # Serial command interface
 │   │   ├── serial_config.cpp  # Serial command implementation
 │   │   └── alarm_logic.cpp    # Alarm state machine
@@ -31,8 +40,26 @@ openEMS/
 │   ├── lib/                   # Library components
 │   │   ├── platform.h         # Platform auto-detection
 │   │   ├── sensor_types.h     # Data structures
-│   │   ├── sensor_library.h   # Sensor catalog (30+ sensors)
-│   │   ├── sensor_calibration_data.h  # Calibration database
+│   │   ├── sensor_library.h   # Sensor library orchestrator
+│   │   ├── sensor_library/    # Modular sensor definitions
+│   │   │   ├── sensor_types.h       # SensorInfo struct, enums
+│   │   │   ├── sensor_categories.h  # Category enum, helpers
+│   │   │   ├── sensor_helpers.h     # Lookup functions
+│   │   │   └── sensors/             # Sensor entries by type
+│   │   │       ├── thermocouples.h  # MAX6675, MAX31855
+│   │   │       ├── thermistors.h    # VDO, generic NTC
+│   │   │       ├── pressure.h       # Linear, polynomial, table
+│   │   │       ├── voltage.h        # Voltage divider
+│   │   │       ├── frequency.h      # RPM, speed sensors
+│   │   │       ├── environmental.h  # BME280 sensors
+│   │   │       └── digital.h        # Float switch
+│   │   ├── sensor_calibration_data.h  # Calibration orchestrator
+│   │   ├── sensor_calibration_data/   # Calibration database (by manufacturer)
+│   │   │   ├── vdo/           # VDO thermistors & pressure sensors
+│   │   │   ├── aem/           # AEM performance sensors
+│   │   │   ├── nxp/           # NXP/Freescale sensors
+│   │   │   ├── generic/       # Generic/aftermarket sensors
+│   │   │   └── system/        # System default calibrations
 │   │   └── application_presets.h      # Application configurations
 │   │
 │   ├── outputs/               # Output module directory
@@ -157,14 +184,14 @@ This directory contains the input-based architecture for sensor configuration.
 **input.h**
 - Defines the Input structure (core of the system)
 - Application presets (CHT, OIL_PRESSURE, etc.)
-- Sensor types (MAX6675, VDO_120C_LOOKUP, etc.)
+- Sensor types (MAX6675, VDO_120C_TABLE, etc.)
 - Calibration override union
 - Alarm context structure
 - **Edit:** NO - Core architecture definition
 
 **Key concepts:**
 - **Application** = What you're measuring (e.g., OIL_PRESSURE)
-- **Sensor** = Hardware device (e.g., VDO_5BAR)
+- **Sensor** = Hardware device (e.g., VDO_5BAR_CURVE)
 - **Input** = Physical pin with assigned application and sensor
 
 **input_manager.cpp / input_manager.h**
@@ -173,11 +200,19 @@ This directory contains the input-based architecture for sensor configuration.
 - Input initialization and validation
 - **Edit:** NO - Core system management
 
-**sensor_read.cpp**
-- All sensor reading implementations
-- Thermistor, thermocouple, pressure, voltage functions
-- Unit conversion functions (temp, pressure, etc.)
-- **Edit:** SOMETIMES (when adding new sensor types)
+**sensors/** (directory)
+- Modular sensor reading implementations organized by sensor type
+- Each sensor type in its own subdirectory with focused implementation files
+- **thermistors/** - NTC thermistor reading (lookup tables, Steinhart-Hart, beta equation)
+- **thermocouples/** - Thermocouple sensors (MAX6675, MAX31855, shared utilities)
+- **pressure/** - Pressure sensors (linear voltage-based, polynomial resistance-based)
+- **voltage/** - Voltage measurement (direct ADC, voltage divider)
+- **linear/** - Generic linear sensors
+- **rpm/** - RPM sensing (W-phase alternator)
+- **digital/** - Digital inputs (float switches)
+- **environmental/** - Environmental sensors (BME280)
+- **sensor_utils.*** - Shared utility functions (unit conversions, range validation)
+- **Edit:** YES (add new sensor implementations to appropriate subdirectory)
 
 **serial_config.h / serial_config.cpp**
 - Serial command interface
@@ -204,18 +239,34 @@ This directory contains the input-based architecture for sensor configuration.
 - Calibration type enums
 - **Edit:** RARELY (when adding new calibration methods)
 
-**sensor_library.h**
-- Catalog of supported sensors
-- Sensor info structures with read functions
-- Default calibration references
-- **Edit:** YES (when adding new sensors)
+**sensor_library.h** (orchestrator)
+- Assembles sensor registry from modular files
+- Uses X-macro pattern for registry assembly
+- **Edit:** RARELY (sensor definitions live in sensor_library/sensors/)
+
+**sensor_library/** (directory)
+- Modular sensor definitions using X-macro pattern
+- **sensor_types.h** - SensorInfo struct, PinTypeRequirement enum
+- **sensor_categories.h** - Category enum and helper functions
+- **sensor_helpers.h** - Lookup functions (getSensorInfo, etc.)
+- **sensors/*.h** - Sensor entries organized by type:
+  - thermocouples.h, thermistors.h, pressure.h, voltage.h
+  - frequency.h (RPM + speed), environmental.h, digital.h
+- **Edit:** YES (add sensors to appropriate type file in sensors/)
 
 **sensor_calibration_data.h**
-- All default sensor calibrations in PROGMEM
-- VDO lookup tables
-- Steinhart-Hart coefficients
-- Pressure sensor calibrations
-- **Edit:** YES (when adding calibration data)
+- Main orchestrator that includes all manufacturer calibration files
+- **Edit:** RARELY (only when adding new manufacturers)
+
+**sensor_calibration_data/** (directory)
+- Modular calibration files organized by manufacturer
+- All calibrations stored in PROGMEM (flash memory)
+- **vdo/** - VDO thermistors (lookup tables, Steinhart-Hart) & pressure sensors
+- **aem/** - AEM performance sensors
+- **nxp/** - NXP/Freescale sensors (MPX series)
+- **generic/** - Generic/aftermarket sensors
+- **system/** - System defaults (RPM calibrations, voltage dividers)
+- **Edit:** YES (add calibrations to appropriate manufacturer file)
 
 **application_presets.h**
 - Pre-configured application settings
@@ -457,7 +508,10 @@ This directory contains the comprehensive test mode system for testing outputs w
 **Best practices:**
 - User edits only src/config.h and src/advanced_config.h (usually)
 - Core code in inputs/ and lib/ rarely needs modification
-- New sensors added to lib/sensor_library.h and lib/sensor_calibration_data.h
+- New sensors added to:
+  - lib/sensor_library/sensors/<type>.h (sensor entry using X-macro)
+  - lib/sensor_calibration_data/<manufacturer>/ (calibration data)
+- New manufacturers: Create new directory under lib/sensor_calibration_data/
 - Output and display modules are self-contained in their directories
 - Test scenarios added to test/test_scenarios.h
 - Documentation stays synchronized with code changes
@@ -480,9 +534,3 @@ This directory contains the comprehensive test mode system for testing outputs w
 - GitHub Issues
 - Include file versions (git commit hash)
 - State which files you modified
-
----
-
-**Organized structure makes adding sensors and troubleshooting much easier!**
-
-**For the classic car community.**

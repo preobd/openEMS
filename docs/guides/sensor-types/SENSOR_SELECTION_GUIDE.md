@@ -4,22 +4,59 @@
 
 ---
 
-## Quick Start - Just Pick Your Sensor!
+## Quick Start - Two-Layer Selection
 
-The sensor library makes configuration easy. You just need to know what physical sensor you have, then pick the matching ID from the catalog.
+The sensor library is organized into **categories** (sensor types) and **presets** (specific calibrations).
 
+### Browse Categories
 ```
-SET 6 CHT MAX6675
-SET A2 COOLANT_TEMP VDO_120C_LOOKUP
-SET A3 OIL_PRESSURE VDO_5BAR
+LIST SENSORS                    # Show all sensor categories
+LIST SENSORS NTC_THERMISTOR     # Show NTC thermistor presets
+LIST SENSORS TEMPERATURE        # Show ALL temperature sensors
+```
+
+### Configure with Category + Preset
+```
+SET A2 SENSOR NTC_THERMISTOR VDO_120C_TABLE   # Two-layer syntax (preferred)
+SET A2 SENSOR VDO_120C_TABLE                   # Legacy flat syntax (still works)
+```
+
+### Quick Examples
+```
+SET 6 CHT MAX6675                              # Thermocouple CHT
+SET A2 COOLANT_TEMP NTC VDO_120C_TABLE        # NTC coolant sensor
+SET A3 OIL_PRESSURE RESISTIVE_PRESSURE VDO_5BAR_CURVE  # Resistive oil pressure
 SAVE
 ```
 
 **That's it!** The system automatically handles calibration, conversion functions, and display formatting.
 
+### Category Aliases
+For convenience, these shorter aliases work:
+- `NTC`, `THERMISTOR` → `NTC_THERMISTOR`
+- `TC` → `THERMOCOUPLE`
+- `RESISTIVE`, `PIEZO` → `RESISTIVE_PRESSURE`
+
 ---
 
-## Sensor Catalog
+## Sensor Categories
+
+| Category | Aliases | Description |
+|----------|---------|-------------|
+| `THERMOCOUPLE` | TC | K-Type thermocouple amplifiers |
+| `NTC_THERMISTOR` | NTC, THERMISTOR | NTC thermistor temperature sensors |
+| `LINEAR_TEMP` | - | Linear voltage temperature sensors |
+| `LINEAR_PRESSURE` | - | Linear voltage pressure sensors (0.5-4.5V) |
+| `RESISTIVE_PRESSURE` | RESISTIVE, PIEZO | Resistive pressure senders (VDO, etc.) |
+| `VOLTAGE` | - | Battery/voltage monitoring |
+| `RPM` | - | Engine RPM sensors |
+| `SPEED` | - | Vehicle speed sensors |
+| `ENVIRONMENTAL` | - | Environmental sensors (BME280) |
+| `DIGITAL` | - | Digital input sensors |
+
+---
+
+## Sensor Catalog (by Category)
 
 ### Temperature Sensors - Thermocouples
 
@@ -45,9 +82,9 @@ See [THERMOCOUPLE_GUIDE.md](THERMOCOUPLE_GUIDE.md) for detailed setup.
 
 | Sensor ID | Description | Range | Method |
 |-----------|-------------|-------|--------|
-| `VDO_120C_LOOKUP` | VDO 120°C sender (lookup table) | -40 to 120°C | Most accurate |
+| `VDO_120C_TABLE` | VDO 120°C sender (table) | -40 to 120°C | Most accurate |
 | `VDO_120C_STEINHART` | VDO 120°C sender (Steinhart-Hart) | -40 to 120°C | Faster |
-| `VDO_150C_LOOKUP` | VDO 150°C sender (lookup table) | -40 to 150°C | Most accurate |
+| `VDO_150C_TABLE` | VDO 150°C sender (table) | -40 to 150°C | Most accurate |
 | `VDO_150C_STEINHART` | VDO 150°C sender (Steinhart-Hart) | -40 to 150°C | Faster |
 
 **Best for:** Coolant temperature, oil temperature, transfer case temperature
@@ -61,14 +98,20 @@ Add pull-down resistor: Analog pin → 1kΩ resistor → GND
 
 See [VDO_SENSOR_GUIDE.md](VDO_SENSOR_GUIDE.md) for detailed setup.
 
-### Temperature Sensors - Generic Thermistors
+### Temperature Sensors - Generic NTC Thermistors
 
 | Sensor ID | Description | Notes |
 |-----------|-------------|-------|
-| `THERMISTOR_LOOKUP` | Generic lookup table thermistor | Requires custom calibration |
-| `THERMISTOR_STEINHART` | Generic Steinhart-Hart thermistor | Requires custom calibration |
+| `NTC_TABLE` | Generic NTC (custom lookup table) | Requires custom calibration |
+| `NTC_STEINHART` | Generic NTC (custom Steinhart-Hart) | Requires custom calibration |
 
 **Best for:** Custom NTC thermistors, non-VDO sensors
+
+**Example with custom Steinhart-Hart coefficients:**
+```
+SET A2 COOLANT_TEMP NTC_THERMISTOR NTC_STEINHART
+SET A2 STEINHART 10000 1.129e-3 2.341e-4 8.775e-8
+```
 
 See [ADVANCED_CALIBRATION_GUIDE.md](../configuration/ADVANCED_CALIBRATION_GUIDE.md) for custom calibration.
 
@@ -76,10 +119,11 @@ See [ADVANCED_CALIBRATION_GUIDE.md](../configuration/ADVANCED_CALIBRATION_GUIDE.
 
 | Sensor ID | Description | Range |
 |-----------|-------------|-------|
-| `VDO_2BAR` | VDO 0-2 bar pressure sender | 0-29 PSI |
-| `VDO_5BAR` | VDO 0-5 bar pressure sender | 0-73 PSI |
+| `VDO_2BAR_CURVE` | VDO 0-2 bar pressure sender | 0-29 PSI |
+| `VDO_5BAR_CURVE` | VDO 0-5 bar pressure sender | 0-73 PSI |
 | `GENERIC_BOOST` | Generic 0.5-4.5V boost sensor | Configurable |
 | `MPX4250AP` | Freescale MAP sensor | 20-250 kPa |
+| `MPX5700AP` | Freescale MAP sensor | 15-700 kPa |
 
 **Best for:** Oil pressure, boost pressure, fuel pressure
 
@@ -147,7 +191,7 @@ See [BME280_GUIDE.md](BME280_GUIDE.md) for detailed setup.
 
 For VDO thermistors, you can choose between two calibration methods:
 
-### Lookup Table Method (`_LOOKUP`)
+### _TABLE Method (`_LOOKUP`)
 - **More accurate** - Uses manufacturer's exact resistance/temperature table
 - **Slightly slower** - Interpolates between table values
 - **Recommended for:** Critical sensors (coolant, oil temp)
@@ -159,7 +203,7 @@ For VDO thermistors, you can choose between two calibration methods:
 
 **Example - mixing methods:**
 ```
-SET A0 COOLANT_TEMP VDO_120C_LOOKUP     # Critical - maximum accuracy
+SET A0 COOLANT_TEMP VDO_120C_TABLE     # Critical - maximum accuracy
 SET A1 OIL_TEMP VDO_150C_STEINHART      # Less critical - faster
 SAVE
 ```
@@ -174,12 +218,12 @@ Each input needs both an **Application** (what you're measuring) and a **Sensor*
 |-------------|-------------|-----------------|
 | `CHT` | Cylinder Head Temperature | MAX6675, MAX31855 |
 | `EGT` | Exhaust Gas Temperature | MAX31855 |
-| `COOLANT_TEMP` | Engine Coolant Temperature | VDO_120C_LOOKUP |
-| `OIL_TEMP` | Engine Oil Temperature | VDO_150C_LOOKUP |
-| `TCASE_TEMP` | Transfer Case Temperature | VDO_150C_LOOKUP |
-| `OIL_PRESSURE` | Engine Oil Pressure | VDO_5BAR |
-| `BOOST_PRESSURE` | Turbo/Supercharger Boost | VDO_2BAR, GENERIC_BOOST |
-| `FUEL_PRESSURE` | Fuel Rail Pressure | VDO_5BAR |
+| `COOLANT_TEMP` | Engine Coolant Temperature | VDO_120C_TABLE |
+| `OIL_TEMP` | Engine Oil Temperature | VDO_150C_TABLE |
+| `TCASE_TEMP` | Transfer Case Temperature | VDO_150C_TABLE |
+| `OIL_PRESSURE` | Engine Oil Pressure | VDO_5BAR_CURVE |
+| `BOOST_PRESSURE` | Turbo/Supercharger Boost | VDO_2BAR_CURVE, GENERIC_BOOST |
+| `FUEL_PRESSURE` | Fuel Rail Pressure | VDO_5BAR_CURVE |
 | `PRIMARY_BATTERY` | Main Battery Voltage | VOLTAGE_DIVIDER |
 | `AUXILIARY_BATTERY` | Secondary Battery Voltage | VOLTAGE_DIVIDER |
 | `COOLANT_LEVEL` | Coolant Level Switch | FLOAT_SWITCH |
@@ -198,9 +242,9 @@ Each input needs both an **Application** (what you're measuring) and a **Sensor*
 SET 6 CHT MAX6675
 
 # VDO sensors for coolant, oil temp, oil pressure
-SET A2 COOLANT_TEMP VDO_120C_LOOKUP
+SET A2 COOLANT_TEMP VDO_120C_TABLE
 SET A0 OIL_TEMP VDO_150C_STEINHART
-SET A3 OIL_PRESSURE VDO_5BAR
+SET A3 OIL_PRESSURE VDO_5BAR_CURVE
 
 # Battery voltage
 SET A8 PRIMARY_BATTERY VOLTAGE_DIVIDER
@@ -251,6 +295,3 @@ A: Use `LIST APPLICATIONS` command.
 - [BME280_GUIDE.md](BME280_GUIDE.md) - Environmental sensor
 - [ADVANCED_CALIBRATION_GUIDE.md](../configuration/ADVANCED_CALIBRATION_GUIDE.md) - Custom calibrations
 
----
-
-**For the classic car community.**

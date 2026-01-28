@@ -4,6 +4,10 @@ openEMS Static Configuration Tool
 
 An interactive CLI to generate static sensor configurations for openEMS,
 reducing the reliance on EEPROM and enabling static build optimizations.
+
+Parses sensor definitions from the modular sensor library structure:
+  - src/lib/sensor_library.h (orchestrator)
+  - src/lib/sensor_library/sensors/*.h (sensor definitions by type)
 """
 import argparse
 import json
@@ -41,14 +45,18 @@ def print_header():
     print()
 
 def load_registries(project_dir: str) -> Optional[Dict[str, List[Dict[str, Any]]]]:
-    """Loads all C registry files."""
+    """Loads all C registry files.
+
+    Parses sensor_library.h which includes modular sensor definitions from
+    sensor_library/sensors/*.h using X-macro pattern.
+    """
     print("Loading registries...")
     try:
         sensors = parse_sensor_library(os.path.join(project_dir, "src/lib/sensor_library.h"))
         apps = parse_application_presets(os.path.join(project_dir, "src/lib/application_presets.h"))
         units = parse_units_registry(os.path.join(project_dir, "src/lib/units_registry.h"))
 
-        print(f"  \u2713 {len(sensors)} sensors from sensor_library.h")
+        print(f"  \u2713 {len(sensors)} sensors from sensor_library.h (+ sensor_library/sensors/)")
         print(f"  \u2713 {len(apps)} applications from application_presets.h")
         print(f"  \u2713 {len(units)} units from units_registry.h")
         print()
@@ -265,12 +273,16 @@ def main():
 
     inputs: List[Dict[str, Any]] = []
     should_add_new = True
+    original_timestamp = None  # Track original timestamp to preserve it if no changes made
 
     if args.load:
         should_add_new = False
         try:
             with open(args.load, 'r') as f:
                 config_data = json.load(f)
+
+            # Preserve the original timestamp
+            original_timestamp = config_data.get("metadata", {}).get("timestamp")
 
             # Validate unified v1 schema
             if config_data.get("schemaVersion") != 1:
@@ -299,6 +311,9 @@ def main():
             inputs = convert_from_unified_format(config_data.get("inputs", []))
             print(f"Loaded {len(inputs)} inputs from {args.load}")
 
+            # Track if user makes any changes
+            config_modified = False
+
             while True:
                 print("\nCurrent configuration:")
                 for i, inp in enumerate(inputs):
@@ -311,15 +326,18 @@ def main():
                         idx = int(input("Enter the number of the input to edit: "))
                         used_pins = [str(i['pin']) for i in inputs]
                         inputs[idx] = edit_input(inputs[idx], platform, used_pins, registries)
+                        config_modified = True
                     except (ValueError, IndexError):
                         print("Invalid selection.")
                 elif choice == 'a':
                     should_add_new = True
+                    config_modified = True
                     break
                 elif choice == 'd':
                     try:
                         idx = int(input("Enter the number of the input to delete: "))
                         inputs.pop(idx)
+                        config_modified = True
                     except (ValueError, IndexError):
                         print("Invalid selection.")
                 elif choice in ('f', ''):
@@ -363,8 +381,15 @@ def main():
     for i, inp in enumerate(inputs):
         inp['input_number'] = i
 
-    save_path = args.load
-    if not save_path:
+    save_path = None
+
+    # Determine if we should save
+    if args.load:
+        # Only save if changes were made
+        if config_modified or should_add_new:
+            save_path = args.load
+    else:
+        # For new configurations, ask user if they want to save
         if input("\nSave to JSON? [y/N]: ").strip().lower() == 'y':
             filename = input("File: ").strip()
             if filename:
@@ -375,13 +400,16 @@ def main():
 
     if save_path:
         with open(save_path, 'w') as f:
+            # Determine timestamp: use original if loading without changes, otherwise use current time
+            timestamp = original_timestamp if (original_timestamp and not config_modified and not should_add_new) else int(time.time())
+
             unified_config = {
                 "schemaVersion": 1,
                 "mode": "static",
                 "metadata": {
                     "toolVersion": TOOL_VERSION,
                     "platform": platform,
-                    "timestamp": int(time.time())
+                    "timestamp": timestamp
                 },
                 "inputs": convert_to_unified_format(inputs)
             }
